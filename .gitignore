@@ -1,0 +1,12 @@
+node_modules/
+.pnpm-store/
+pgsql-data/
+dist/
+
+# 环境变量：含 API_KEY，不要提交
+.env
+.env.*
+!.env.example
+
+.DS_Store
+*.log

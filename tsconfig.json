@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    // 运行环境：Node.js + ESM（package.json 中 "type": "module"）
+    "target": "esnext",
+    "module": "nodenext",
+    "types": ["node"],
+
+    // 直接用 node 运行 .ts，TS 只负责类型检查，不输出文件
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true,
+
+    // 类型检查
+    "strict": true,
+    "skipLibCheck": true
+  },
+  "include": ["src", "drizzle.config.ts"]
+}
