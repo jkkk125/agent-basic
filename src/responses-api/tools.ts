@@ -4,43 +4,21 @@ import { zodResponsesFunction } from 'openai/helpers/zod'
 import { z } from 'zod'
 import pfs from 'fs/promises'
 import { spawn, type ChildProcess } from 'node:child_process'
-import { resolve, sep } from 'node:path'
+import { isAbsolute, resolve, sep } from 'node:path'
 
-/** 所有工具共用的根目录：read_file / apply_patch 的相对路径、run_shell 的 cwd 都以它为基准 */
+/** 所有工具共用的默认根目录：相对路径都以它为基准；绝对路径可以直接指向其他目录 */
 export const WORKSPACE_ROOT = process.cwd()
+
+/** 相对路径锚定工作区，绝对路径原样使用；默认在工作区内，显式给绝对路径就能操作别的目录 */
+export function resolveWorkspacePath(path: string): string {
+  const trimmed = path.trim()
+  return isAbsolute(trimmed) ? resolve(trimmed) : resolve(WORKSPACE_ROOT, trimmed)
+}
 
 const mcp = new Client({ name: 'docs-cli', version: '0.1.0' })
 const transport = new StreamableHTTPClientTransport(
   new URL('https://developers.openai.com/mcp'),
 )
-
-// 手写工具声明
-// const currentTimeTool: OpenAI.Responses.FunctionTool = {
-//   name: 'get_current_time', // 工具名称
-//   type: 'function', // 类型定义 固定为 function
-//   description: '查询指定时区的当前日期和时间', // 工具描述
-//   parameters: {
-//     type: 'object',
-//     properties: {
-//       timezone: {
-//         type: 'string',
-//         description: '时区名称，如 "Asia/Shanghai"',
-//       }
-//     },
-//     required: ['timezone'], // 规定参数必填
-//     additionalProperties: false, // 是否允许额外属性
-//   },
-//   strict: false, // 是否严格验证参数
-// }
-
-
-// function get_current_time(args: { timezone: string }) {
-//   if (!args || !args.timezone) {
-//     return '请提供正确的时区名称'
-//   }
-//   const currentTime = new Date().toLocaleString('zh-CN', { timeZone: args.timezone })
-//   return `当前${args.timezone}的日期和时间：${currentTime}`
-// }
 
 const currentTimeTool = zodResponsesFunction({
   name: 'get_current_time',
@@ -59,15 +37,15 @@ const currentTimeTool = zodResponsesFunction({
 
 const readFileTool = zodResponsesFunction({
   name: 'read_file',
-  description: '读取文件内容',
+  description: '读取文件内容。相对路径以项目根目录为基准，也可以传绝对路径读取其他目录的文件',
   parameters: z.object({
-    path: z.string().describe('文件路径'),
+    path: z.string().describe('文件路径，相对路径以项目根目录为基准；绝对路径可指向项目外的目录'),
   }),
   function: async (args) => {
     if (!args.path) {
       return '请提供文件路径'
     }
-    const path = resolve(WORKSPACE_ROOT, args.path)
+    const path = resolveWorkspacePath(args.path)
     const stat = await pfs.stat(path).catch(() => null)
     if (!stat) {
       return `${path} 文件不存在`
@@ -95,11 +73,16 @@ type ShellResult = {
   timeoutMs: number
 }
 
-/** cwd 必须落在项目目录内，防止模型 cd 到项目外面 */
+/** 相对 cwd 必须落在项目目录内；绝对路径视为用户显式指定，允许指向项目外的其他目录 */
 function resolveShellCwd(cwd?: string): string {
-  const target = resolve(WORKSPACE_ROOT, cwd && cwd.trim() ? cwd.trim() : '.')
+  const raw = cwd?.trim()
+  if (!raw) return WORKSPACE_ROOT
+  if (isAbsolute(raw)) return resolve(raw)
+  const target = resolve(WORKSPACE_ROOT, raw)
   if (target !== WORKSPACE_ROOT && !target.startsWith(WORKSPACE_ROOT + sep)) {
-    throw new Error(`工作目录必须位于项目目录内（${WORKSPACE_ROOT}），收到：${target}`)
+    throw new Error(
+      `相对工作目录不能指向项目目录之外（${WORKSPACE_ROOT}），如需操作其他目录请传绝对路径，收到：${raw}`,
+    )
   }
   return target
 }
@@ -116,17 +99,21 @@ function killChildTree(child: ChildProcess) {
   }
 }
 
-function runShellCommand(
+async function runShellCommand(
   command: string,
   options: { cwd?: string, timeoutMs?: number } = {},
 ): Promise<ShellResult> {
   const cwd = resolveShellCwd(options.cwd)
+  const cwdStat = await pfs.stat(cwd).catch(() => null)
+  if (!cwdStat?.isDirectory()) {
+    throw new Error(`工作目录不存在或不是目录：${cwd}`)
+  }
   const timeoutMs = Math.min(
     Math.max(Math.trunc(options.timeoutMs ?? DEFAULT_SHELL_TIMEOUT_MS), 1_000),
     MAX_SHELL_TIMEOUT_MS,
   )
 
-  return new Promise<ShellResult>((resolvePromise, rejectPromise) => {
+  return await new Promise<ShellResult>((resolvePromise, rejectPromise) => {
     const child = spawn('sh', ['-c', command], {
       cwd,
       detached: true, // 自成进程组，超时时可以整组杀掉
@@ -215,13 +202,14 @@ const runShellTool = zodResponsesFunction({
     '在用户的本地项目里执行一条 shell 命令（sh -c，非交互），返回 stdout、stderr 和退出码。',
     '限制与约定：',
     '- 每条命令都在全新进程里执行，`cd` 不会保留到下一次调用；请用 cwd 参数，或用绝对路径 / `&&` 串联。',
+    '- 默认在当前项目目录下执行；要操作项目外的目录，cwd 或命令里请直接写绝对路径。',
     '- 不要执行交互式命令（vim、less、top、不带 -m 的 git commit、等待 stdin 的程序），它们会立即失败。',
     '- 读取文件内容优先用 read_file（会校验路径并给出更明确的错误），修改文件用 apply_patch，不要用 shell 重写整份文件。',
     '- 输出上限 20000 字符，超出会被截断；看大文件请配合 head / tail / grep。',
   ].join('\n'),
   parameters: z.object({
     command: z.string().describe('要执行的完整命令，例如 `git status --short` 或 `ls -la src`'),
-    cwd: z.string().nullable().describe('工作目录，相对路径以项目根目录为基准，不能指向项目目录之外'),
+    cwd: z.string().nullable().describe('工作目录，相对路径以项目根目录为基准且不能跳出项目；绝对路径可以指向项目外的其他目录'),
     timeout_ms: z.number().nullable().describe('超时毫秒数，默认 60000，最大 300000'),
   }),
   function: async (args) => {

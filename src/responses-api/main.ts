@@ -1,14 +1,13 @@
 import 'dotenv/config'
 import { OpenAI } from 'openai'
-import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client'
 import { toResponseInputItems } from 'openai/lib/responses/ResponseInputItems'
 import { createInterface } from 'readline/promises'
 import { styleText } from 'node:util'
 import { pgsql } from '../drizzle/index.ts'
-import { agent_sessions, agent_messages } from '../drizzle/schema.ts'
+import { agent_sessions, agent_messages, agent_usage } from '../drizzle/schema.ts'
 import { asc, eq, sql } from 'drizzle-orm'
-import { get } from 'lodash-es'
-import { EXEC_TOOL, ALL_TOOLS_DEFINED, INIT_MCP, WORKSPACE_ROOT } from './model-tools.ts'
+import { get, set } from 'lodash-es'
+import { EXEC_TOOL, ALL_TOOLS_DEFINED, INIT_MCP, WORKSPACE_ROOT } from './tools.ts'
 import { applyPatch } from './applyDiff.ts'
 
 const rl = createInterface({
@@ -37,7 +36,16 @@ const instructions = [
   "7. 使用使用中文回答问题。"
 ].join('\n')
 
-async function ask(question: string, history: OpenAI.Responses.ResponseInput) {
+type AskResponse = {
+  response_id: string
+  output: OpenAI.Responses.ResponseInputItem[]
+  usage: OpenAI.Responses.ResponseUsage | null
+}
+
+async function ask(
+  question: string, 
+  history: OpenAI.Responses.ResponseInput
+): Promise<AskResponse> {
   const input: OpenAI.Responses.ResponseInput = [
     ...history,
     {
@@ -46,6 +54,21 @@ async function ask(question: string, history: OpenAI.Responses.ResponseInput) {
       type: 'message'
     }
   ]
+
+  const getAskResponse = (
+    chunk: 
+    OpenAI.Responses.ResponseIncompleteEvent | 
+    OpenAI.Responses.ResponseFailedEvent | 
+    OpenAI.Responses.ResponseCompletedEvent |
+    OpenAI.Responses.Response
+  ) => {
+    return {
+      response_id: 'response' in chunk ? chunk.response.id : chunk.id,
+      output: input.slice(history.length),
+      usage: ('response' in chunk ? chunk.response.usage : chunk.usage) ?? null
+    }
+  }
+  
   let maxToolCalls = 20
   
   while (maxToolCalls--) {
@@ -84,7 +107,7 @@ async function ask(question: string, history: OpenAI.Responses.ResponseInput) {
           break
 
         case 'response.reasoning_text.delta':
-          process.stdout.write(styleText('cyan', `${chunk.delta}`))
+          process.stdout.write(styleText('cyan', chunk.delta))
           break
         case 'response.reasoning_text.done':
           process.stdout.write(styleText('cyan', `思考过程结束； \n`))
@@ -99,7 +122,7 @@ async function ask(question: string, history: OpenAI.Responses.ResponseInput) {
           break
 
         case 'response.function_call_arguments.delta':
-          process.stdout.write(styleText('magenta', `${chunk.delta}`))
+          process.stdout.write(styleText('magenta', chunk.delta))
           break
 
         case 'response.function_call_arguments.done':
@@ -107,7 +130,7 @@ async function ask(question: string, history: OpenAI.Responses.ResponseInput) {
           break
 
         case 'response.custom_tool_call_input.delta':
-          process.stdout.write(styleText('magenta', `${chunk.delta}`))
+          process.stdout.write(styleText('magenta', chunk.delta))
           break
 
         case 'response.custom_tool_call_input.done':
@@ -116,13 +139,17 @@ async function ask(question: string, history: OpenAI.Responses.ResponseInput) {
 
         case 'response.incomplete':
           process.stdout.write(styleText('yellow', '响应未完成（incomplete），本轮提前结束，保留已产生的中间过程\n'))
-          return input.slice(history.length)
+          console.log(chunk.response.usage)
+          return getAskResponse(chunk)
 
         case 'response.failed':
           process.stdout.write(styleText('redBright', `响应失败：${chunk.response.error?.message ?? '未知错误'}\n`))
-          return input.slice(history.length)
+          return getAskResponse(chunk)
 
         case 'response.completed':
+          console.log(chunk.response.usage)
+          console.log(chunk.response.id)
+          const response_id = chunk.response.id
           const newItems = toResponseInputItems(chunk.response.output)
           input.push(...newItems)
           const toolCalls = chunk.response.output.filter(v => v.type === 'function_call')
@@ -167,7 +194,7 @@ async function ask(question: string, history: OpenAI.Responses.ResponseInput) {
           process.stdout.write(styleText('blueBright', `${'-'.repeat(100)}\n`))
           if (toolCalls.length === 0 && customeToolCalls.length === 0) {
             process.stdout.write(styleText('blueBright', `工具调用结束\n`))  
-            return input.slice(history.length)
+            return getAskResponse(chunk)
           }
           break
       }
@@ -175,22 +202,40 @@ async function ask(question: string, history: OpenAI.Responses.ResponseInput) {
   }
 
   // 兜底：20 轮里始终没出现"无工具调用"的收尾轮时，也必须把已产生的中间过程交回去。
-  // 否则上层 `if (newItems)` 拿到 undefined，这一轮的 input 既不落库也不进 history，上下文直接断掉。
   process.stdout.write(styleText('yellow', '已达到最大轮数仍未得到最终回答，保留已产生的中间过程\n'))
-  return input.slice(history.length)
+  input.push({
+    role: 'developer',
+    type: 'message',
+    content: '工具调用次数已达上限。不要再调用工具，仅根据已有结果用中文总结：已完成项、未完成项，以及继续时最关键的一步。信息不足就明确说未完成。',
+  })
+  const finalAnswer = await openai.responses.create({
+    model: process.env.MODEL_NAME as string,
+    instructions: instructions,
+    input,
+    tools: ALL_TOOLS_DEFINED,
+    stream: false
+  })
+
+  input.push(...toResponseInputItems(finalAnswer.output))
+
+  console.log(finalAnswer.output_text)
+
+  return getAskResponse(finalAnswer)
 }
 
 async function saveTurn(
   sessionId: string, 
-  question: string, 
   startPosition: number, 
-  saveMessages: OpenAI.Responses.ResponseInputItem[]
+  saveMessages: OpenAI.Responses.ResponseInputItem[],
+  response_id: string,
+  usage: OpenAI.Responses.ResponseUsage | null
 ) {
   await pgsql.transaction(async (tx) => {
     await tx.insert(agent_messages).values(
       saveMessages.map((v, idx) => {
         return {
           session_id: sessionId,
+          response_id,
           position: startPosition + idx,
           type: v.type as string,
           role: get(v, 'role', null),
@@ -200,6 +245,18 @@ async function saveTurn(
         }
       })
     )
+
+    if (usage) {
+      await tx.insert(agent_usage).values({
+        session_id: sessionId,
+        response_id,
+        input_tokens: usage.input_tokens,
+        output_tokens: usage.output_tokens,
+        total_tokens: usage.total_tokens,
+        input_tokens_details: usage.input_tokens_details,
+        output_tokens_details: usage.output_tokens_details,
+      })
+    }
 
     await tx.update(agent_sessions).set({
       updated_at: sql`now()`,
@@ -279,10 +336,10 @@ async function main() {
         }).then(v => v[0].id)
       }
   
-      const newItems = await ask(question, history)
+      const { response_id, output: newItems, usage } = await ask(question, history)
       if (newItems) {
         const startPosition = history.length
-        await saveTurn(sessionId!, question, startPosition, newItems)
+        await saveTurn(sessionId!, startPosition, newItems, response_id, usage)
         history.push(...newItems)
       }
     }

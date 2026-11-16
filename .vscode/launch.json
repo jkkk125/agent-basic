@@ -12,7 +12,7 @@
         "<node_internals>/**",
         "node_modules/**"
       ],
-      "program": "${file}",
+      "program": "${workspaceFolder}/src/responses-api/main.ts",
       "console": "integratedTerminal"
     },
     {
@@ -23,7 +23,7 @@
         "<node_internals>/**",
         "node_modules/**"
       ],
-      "program": "${file}",
+      "program": "${workspaceFolder}/src/responses-api/main.ts",
       "args": [
         "--session",
         "517ad9db-c52c-49fd-b573-b034dd03e7f6"

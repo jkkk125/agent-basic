@@ -1,0 +1,275 @@
+{
+  "type": "diff",
+  "version": "9",
+  "dialect": "postgres",
+  "id": "3c7cbb20-3d4f-4387-a911-9a17e29157b9",
+  "prevIds": [
+    "07d71144-054e-453a-b441-b7b5c85d65dc"
+  ],
+  "footprints": [
+    {
+      "statementType": "create_table",
+      "statementTarget": [
+        "table",
+        "public",
+        "agent_usage"
+      ],
+      "writes": [
+        "s|tbl|public.agent_usage",
+        "n|tbl|public.agent_usage",
+        "e|tbl|public.agent_usage",
+        "n|rel|public.agent_usage",
+        "n|type|public.agent_usage",
+        "n|rel|public.agent_usage_pkey"
+      ],
+      "reads": [
+        "n|sch|public"
+      ]
+    },
+    {
+      "statementType": "add_column",
+      "statementTarget": [
+        "column",
+        "public",
+        "agent_messages",
+        "response_id"
+      ],
+      "writes": [
+        "s|col|public.agent_messages.response_id",
+        "n|col|public.agent_messages.response_id",
+        "e|col|public.agent_messages.response_id"
+      ],
+      "reads": [
+        "n|tbl|public.agent_messages",
+        "n|sch|public"
+      ]
+    },
+    {
+      "statementType": "create_fk",
+      "statementTarget": [
+        "table",
+        "public",
+        "agent_usage"
+      ],
+      "writes": [
+        "s|fk|public.agent_usage.agent_usage_session_id_agent_sessions_id_fkey",
+        "n|fk|public.agent_usage.agent_usage_session_id_agent_sessions_id_fkey",
+        "e|fk|public.agent_usage.agent_usage_session_id_agent_sessions_id_fkey",
+        "n|con|public.agent_usage.agent_usage_session_id_agent_sessions_id_fkey"
+      ],
+      "reads": [
+        "n|tbl|public.agent_usage",
+        "n|sch|public",
+        "n|tbl|public.agent_sessions",
+        "n|sch|public",
+        "n|col|public.agent_usage.session_id",
+        "n|col|public.agent_sessions.id",
+        "e|uniqueness|public.agent_sessions.id"
+      ]
+    }
+  ],
+  "deltas": [
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "name": "agent_usage",
+        "isRlsEnabled": false,
+        "entityType": "tables"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "agent_messages",
+        "name": "response_id",
+        "type": "uuid",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "agent_usage",
+        "name": "id",
+        "type": "serial",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "agent_usage",
+        "name": "session_id",
+        "type": "uuid",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "agent_usage",
+        "name": "response_id",
+        "type": "uuid",
+        "typeSchema": null,
+        "notNull": false,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "agent_usage",
+        "name": "input_tokens",
+        "type": "integer",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "agent_usage",
+        "name": "output_tokens",
+        "type": "integer",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "agent_usage",
+        "name": "total_tokens",
+        "type": "integer",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "agent_usage",
+        "name": "input_tokens_details",
+        "type": "jsonb",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "agent_usage",
+        "name": "output_tokens_details",
+        "type": "jsonb",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": null,
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "agent_usage",
+        "name": "created_at",
+        "type": "timestamp with time zone",
+        "typeSchema": null,
+        "notNull": true,
+        "dimensions": 0,
+        "default": "now()",
+        "generated": null,
+        "identity": null,
+        "entityType": "columns"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "agent_usage",
+        "name": "agent_usage_session_id_agent_sessions_id_fkey",
+        "nameExplicit": false,
+        "columns": [
+          "session_id"
+        ],
+        "schemaTo": "public",
+        "tableTo": "agent_sessions",
+        "columnsTo": [
+          "id"
+        ],
+        "onUpdate": "NO ACTION",
+        "onDelete": "NO ACTION",
+        "entityType": "fks"
+      }
+    },
+    {
+      "op": "create",
+      "row": {
+        "schema": "public",
+        "table": "agent_usage",
+        "name": "agent_usage_pkey",
+        "columns": [
+          "id"
+        ],
+        "nameExplicit": false,
+        "entityType": "pks"
+      }
+    }
+  ]
+}
