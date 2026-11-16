@@ -3,9 +3,9 @@ import { OpenAI } from 'openai'
 import { toResponseInputItems } from 'openai/lib/responses/ResponseInputItems'
 import { createInterface } from 'readline/promises'
 import { styleText } from 'node:util'
-import { pgsql } from '../drizzle/index.ts'
+import { db } from '../drizzle/index.ts'
 import { agent_sessions, agent_messages, agent_usage } from '../drizzle/schema.ts'
-import { asc, eq, sql } from 'drizzle-orm'
+import { asc, eq } from 'drizzle-orm'
 import { get, set } from 'lodash-es'
 import { EXEC_TOOL, ALL_TOOLS_DEFINED, INIT_MCP, WORKSPACE_ROOT } from './tools.ts'
 import { applyPatch } from './applyDiff.ts'
@@ -69,7 +69,7 @@ async function ask(
     }
   }
   
-  let maxToolCalls = 20
+  let maxToolCalls = 50
   
   while (maxToolCalls--) {
     const stream = await openai.responses.create({
@@ -230,8 +230,8 @@ async function saveTurn(
   response_id: string,
   usage: OpenAI.Responses.ResponseUsage | null
 ) {
-  await pgsql.transaction(async (tx) => {
-    await tx.insert(agent_messages).values(
+  db.transaction((tx) => {
+    tx.insert(agent_messages).values(
       saveMessages.map((v, idx) => {
         return {
           session_id: sessionId,
@@ -244,10 +244,10 @@ async function saveTurn(
           item: v,
         }
       })
-    )
+    ).run()
 
     if (usage) {
-      await tx.insert(agent_usage).values({
+      tx.insert(agent_usage).values({
         session_id: sessionId,
         response_id,
         input_tokens: usage.input_tokens,
@@ -255,18 +255,18 @@ async function saveTurn(
         total_tokens: usage.total_tokens,
         input_tokens_details: usage.input_tokens_details,
         output_tokens_details: usage.output_tokens_details,
-      })
+      }).run()
     }
 
-    await tx.update(agent_sessions).set({
-      updated_at: sql`now()`,
-    }).where(eq(agent_sessions.id, sessionId))
+    tx.update(agent_sessions).set({
+      updated_at: new Date(),
+    }).where(eq(agent_sessions.id, sessionId)).run()
   })
 }
 
 async function loadHistory(sessionId: string) {
   console.log(`[${sessionId}] 开始加载历史会话... \n`)
-  const session = await pgsql.select().from(agent_sessions).where(
+  const session = await db.select().from(agent_sessions).where(
     eq(agent_sessions.id, sessionId)
   )
   
@@ -274,7 +274,7 @@ async function loadHistory(sessionId: string) {
     throw new Error(`Session ${sessionId} not found`)
   }
 
-  const messages = await pgsql.select({
+  const messages = await db.select({
     item: agent_messages.item,
   }).from(agent_messages).where(
     eq(agent_messages.session_id, sessionId)
@@ -329,7 +329,7 @@ async function main() {
   
       if (!sessionId) {
         const sessionName = await generateSessionNameByQuestion(question)
-        sessionId = await pgsql.insert(agent_sessions).values({
+        sessionId = await db.insert(agent_sessions).values({
           name: sessionName,
         }).returning({
           id: agent_sessions.id

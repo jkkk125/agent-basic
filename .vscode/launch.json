@@ -26,7 +26,7 @@
       "program": "${workspaceFolder}/src/responses-api/main.ts",
       "args": [
         "--session",
-        "517ad9db-c52c-49fd-b573-b034dd03e7f6"
+        "55408577-d9d4-42bc-a166-96af9f9d96f1"
       ],
       "console": "integratedTerminal"
     }

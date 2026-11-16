@@ -1,11 +1,17 @@
-import 'dotenv/config';
+import { config } from 'dotenv';
 import { defineConfig } from 'drizzle-kit';
+
+// 以 .env 为准：避免 shell 里遗留的 DATABASE_URL（如旧的 postgres 连接串）覆盖本地 sqlite 路径
+config({ override: true });
+
+const url = process.env.DATABASE_URL;
+if (!url) throw new Error('DATABASE_URL 未配置');
 
 export default defineConfig({
   dbCredentials: {
-    url: process.env.DATABASE_URL!,
+    url,
   },
-  dialect: 'postgresql',
+  dialect: 'sqlite',
   schema: './src/drizzle/schema.ts',
   out: './src/drizzle/migrations',
 })
