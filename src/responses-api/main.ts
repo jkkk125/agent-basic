@@ -36,37 +36,84 @@ const instructions = [
   "7. 使用使用中文回答问题。"
 ].join('\n')
 
-type AskResponse = {
+/**
+ * 一条待落库的 item 及其归属。
+ * response_id 表示「产出/发起它的那一轮响应」，客户端自产（用户提问、兜底提示）为 null。
+ */
+type SavedItem = {
+  item: OpenAI.Responses.ResponseInputItem
+  response_id: string | null
+}
+
+/** 一轮请求的 token 消耗；一次提问可能产生多轮，一轮一行 */
+type RoundUsage = {
   response_id: string
-  output: OpenAI.Responses.ResponseInputItem[]
   usage: OpenAI.Responses.ResponseUsage | null
+}
+
+type AskResponse = {
+  items: SavedItem[]
+  rounds: RoundUsage[]
+}
+
+/** 执行一轮响应里的全部工具调用，返回要追加到上下文的 output item */
+async function runToolCalls(
+  output: OpenAI.Responses.ResponseOutputItem[]
+): Promise<OpenAI.Responses.ResponseInputItem[]> {
+  const results: OpenAI.Responses.ResponseInputItem[] = []
+
+  for (const call of output) {
+    if (call.type === 'custom_tool_call' && call.name === 'apply_patch') {
+      let result: string
+      try {
+        result = await applyPatch(call.input, WORKSPACE_ROOT)
+      } catch (e) {
+        result = `apply_patch 失败: ${(e as Error).message}`
+      }
+      process.stdout.write(styleText('magenta', `${result}\n`))
+      results.push({ type: 'custom_tool_call_output', call_id: call.call_id, output: result })
+    }
+  }
+
+  for (const call of output) {
+    if (call.type !== 'function_call') continue
+
+    process.stdout.write(styleText('magenta', `调用工具：${call.name}，参数：${call.arguments}\n`))
+    let result: string
+    try {
+      result = await EXEC_TOOL(call.name, JSON.parse(call.arguments as string))
+    } catch (e) {
+      result = `${call.name} 调用失败: ${(e as Error).message}`
+    }
+    process.stdout.write(styleText('magenta', `工具调用结束，输出：${result.length} 个字符\n`))
+    results.push({ type: 'function_call_output', call_id: call.call_id, output: result })
+  }
+
+  return results
 }
 
 async function ask(
   question: string, 
   history: OpenAI.Responses.ResponseInput
 ): Promise<AskResponse> {
-  const input: OpenAI.Responses.ResponseInput = [
-    ...history,
-    {
-      role: 'user',
-      content: question,
-      type: 'message'
-    }
-  ]
+  // 唯一的上下文状态：本次提问产生的全部 item（含归属 response_id），input 由它派生
+  const items: SavedItem[] = [{
+    item: { role: 'user', content: question, type: 'message' },
+    response_id: null,
+  }]
+  // 每次请求一条 usage，避免多轮工具调用时只记下最后一轮
+  const rounds: RoundUsage[] = []
 
-  const getAskResponse = (
-    chunk: 
-    OpenAI.Responses.ResponseIncompleteEvent | 
-    OpenAI.Responses.ResponseFailedEvent | 
-    OpenAI.Responses.ResponseCompletedEvent |
-    OpenAI.Responses.Response
-  ) => {
-    return {
-      response_id: 'response' in chunk ? chunk.response.id : chunk.id,
-      output: input.slice(history.length),
-      usage: ('response' in chunk ? chunk.response.usage : chunk.usage) ?? null
-    }
+  const buildInput = (): OpenAI.Responses.ResponseInput => [...history, ...items.map(v => v.item)]
+  const pushItems = (list: OpenAI.Responses.ResponseInputItem[], response_id: string | null) => {
+    items.push(...list.map(item => ({ item, response_id })))
+  }
+  /** 记录一轮响应：记 usage，并把其 output 转成 item 入栈 */
+  const recordResponse = (res: OpenAI.Responses.Response) => {
+    rounds.push({ response_id: res.id, usage: res.usage ?? null })
+    const outItems = toResponseInputItems(res.output)
+    pushItems(outItems, res.id)
+    return outItems
   }
   
   let maxToolCalls = 50
@@ -75,7 +122,7 @@ async function ask(
     const stream = await openai.responses.create({
       model: process.env.MODEL_NAME as string,
       instructions,
-      input,
+      input: buildInput(),
       tools: ALL_TOOLS_DEFINED,
       stream: true,
     });
@@ -140,122 +187,109 @@ async function ask(
         case 'response.incomplete':
           process.stdout.write(styleText('yellow', '响应未完成（incomplete），本轮提前结束，保留已产生的中间过程\n'))
           console.log(chunk.response.usage)
-          return getAskResponse(chunk)
+          // 未完成也要把已产出的 output 落库，否则库里只剩用户那条消息
+          recordResponse(chunk.response)
+          return { items, rounds }
 
         case 'response.failed':
           process.stdout.write(styleText('redBright', `响应失败：${chunk.response.error?.message ?? '未知错误'}\n`))
-          return getAskResponse(chunk)
+          recordResponse(chunk.response)
+          return { items, rounds }
 
-        case 'response.completed':
-          console.log(chunk.response.usage)
-          console.log(chunk.response.id)
-          const response_id = chunk.response.id
-          const newItems = toResponseInputItems(chunk.response.output)
-          input.push(...newItems)
-          const toolCalls = chunk.response.output.filter(v => v.type === 'function_call')
-          const customeToolCalls = chunk.response.output.filter(v => v.type === 'custom_tool_call')
+        case 'response.completed': {
+          const { response } = chunk
+          console.log(response.usage)
+          recordResponse(response)
 
-          for (const customeToolCall of customeToolCalls) {
-            if (customeToolCall.name === 'apply_patch') {
-              let output: string
-              try {
-                output = await applyPatch(customeToolCall.input, WORKSPACE_ROOT)
-              } catch (e) {
-                output = `apply_patch 失败: ${(e as Error).message}`
-              }
-              process.stdout.write(styleText('magenta', `${output}\n`))
-              input.push({
-                type: 'custom_tool_call_output',
-                call_id: customeToolCall.call_id,
-                output,
-              })
-            }
-          }
-          
-          for (const toolCall of toolCalls) {
-            process.stdout.write(styleText('magenta', `调用工具：${toolCall.name}，参数：${toolCall.arguments}\n`))
+          const toolOutputs = await runToolCalls(response.output)
+          pushItems(toolOutputs, response.id)
 
-            let output: string
-            try {
-              const args = JSON.parse(toolCall.arguments as string)
-              output = await EXEC_TOOL(toolCall.name, args)
-            } catch (e) {
-              output = `${toolCall.name} 调用失败: ${(e as Error).message}`
-            }
-            
-            process.stdout.write(styleText('magenta', `工具调用结束，输出：${output.length} 个字符\n`))
-            input.push({
-              type: 'function_call_output',
-              call_id: toolCall.call_id,
-              output: output,
-            })
-          }
           process.stdout.write(styleText('blueBright', '本轮回答生成完成\n'))
           process.stdout.write(styleText('blueBright', `${'-'.repeat(100)}\n`))
-          if (toolCalls.length === 0 && customeToolCalls.length === 0) {
-            process.stdout.write(styleText('blueBright', `工具调用结束\n`))  
-            return getAskResponse(chunk)
+          const hasToolCall = response.output.some(
+            v => v.type === 'function_call' || v.type === 'custom_tool_call'
+          )
+          if (!hasToolCall) {
+            process.stdout.write(styleText('blueBright', `工具调用结束\n`))
+            return { items, rounds }
           }
           break
+        }
       }
     }
   }
 
-  // 兜底：20 轮里始终没出现"无工具调用"的收尾轮时，也必须把已产生的中间过程交回去。
+  // 兜底：50 轮里始终没出现"无工具调用"的收尾轮时，也必须把已产生的中间过程交回去。
   process.stdout.write(styleText('yellow', '已达到最大轮数仍未得到最终回答，保留已产生的中间过程\n'))
-  input.push({
+  pushItems([{
     role: 'developer',
     type: 'message',
     content: '工具调用次数已达上限。不要再调用工具，仅根据已有结果用中文总结：已完成项、未完成项，以及继续时最关键的一步。信息不足就明确说未完成。',
-  })
+  }], null)
   const finalAnswer = await openai.responses.create({
     model: process.env.MODEL_NAME as string,
     instructions: instructions,
-    input,
+    input: buildInput(),
     tools: ALL_TOOLS_DEFINED,
     stream: false
   })
-
-  input.push(...toResponseInputItems(finalAnswer.output))
+  recordResponse(finalAnswer)
 
   console.log(finalAnswer.output_text)
 
-  return getAskResponse(finalAnswer)
+  return { items, rounds }
+}
+
+/** agent_usage 行构造，集中一处避免多处字段漂移 */
+function toUsageRow(
+  sessionId: string,
+  response_id: string | null,
+  usage: OpenAI.Responses.ResponseUsage
+) {
+  return {
+    session_id: sessionId,
+    response_id,
+    input_tokens: usage.input_tokens,
+    output_tokens: usage.output_tokens,
+    total_tokens: usage.total_tokens,
+    input_tokens_details: usage.input_tokens_details,
+    output_tokens_details: usage.output_tokens_details,
+  }
 }
 
 async function saveTurn(
   sessionId: string, 
   startPosition: number, 
-  saveMessages: OpenAI.Responses.ResponseInputItem[],
-  response_id: string,
-  usage: OpenAI.Responses.ResponseUsage | null
+  saveItems: SavedItem[],
+  rounds: RoundUsage[],
 ) {
+  // DatabaseSync 是同步驱动：transaction 回调不能是 async，事务内必须用 .run()
   db.transaction((tx) => {
-    tx.insert(agent_messages).values(
-      saveMessages.map((v, idx) => {
-        return {
-          session_id: sessionId,
-          response_id,
-          position: startPosition + idx,
-          type: v.type as string,
-          role: get(v, 'role', null),
-          tool_name: get(v, 'name', null),
-          call_id: get(v, 'call_id', null),
-          item: v,
-        }
-      })
-    ).run()
+    if (saveItems.length) {
+      tx.insert(agent_messages).values(
+        saveItems.map((v, idx) => {
+          const item = v.item
+          return {
+            session_id: sessionId,
+            response_id: v.response_id,
+            position: startPosition + idx,
+            type: item.type as string,
+            role: get(item, 'role', null),
+            tool_name: get(item, 'name', null),
+            call_id: get(item, 'call_id', null),
+            item,
+          }
+        })
+      ).run()
+    }
 
-    if (usage) {
-      tx.insert(agent_usage).values({
-        session_id: sessionId,
-        response_id,
-        input_tokens: usage.input_tokens,
-        output_tokens: usage.output_tokens,
-        total_tokens: usage.total_tokens,
-        input_tokens_details: usage.input_tokens_details,
-        output_tokens_details: usage.output_tokens_details,
-      }).run()
+    // 一轮一行：多轮工具调用时每轮都要记账
+    const usageRows = rounds
+      .filter((r): r is { response_id: string; usage: OpenAI.Responses.ResponseUsage } => !!r.usage)
+      .map(r => toUsageRow(sessionId, r.response_id, r.usage))
+
+    if (usageRows.length) {
+      tx.insert(agent_usage).values(usageRows).run()
     }
 
     tx.update(agent_sessions).set({
@@ -299,11 +333,15 @@ async function generateSessionNameByQuestion(question: string) {
   })
 
   process.stdout.write(styleText('blueBright', `会话名称生成完成，会话名称：${response.output_text.trim()}\n`))
-  return response.output_text.trim()
+  return {
+    name: response.output_text.trim(),
+    response_id: response.id,
+    usage: response.usage ?? null,
+  }
 }
 
 async function main() {
-  const [key, value, ...others] = process.argv.slice(2)
+  const [key, value] = process.argv.slice(2)
   let sessionId: string | undefined = undefined
   let history: OpenAI.Responses.ResponseInput = []
   if (key === '--session') {
@@ -328,20 +366,23 @@ async function main() {
       }
   
       if (!sessionId) {
-        const sessionName = await generateSessionNameByQuestion(question)
-        sessionId = await db.insert(agent_sessions).values({
-          name: sessionName,
+        const { name, response_id, usage } = await generateSessionNameByQuestion(question)
+        const newSessionId = await db.insert(agent_sessions).values({
+          name,
         }).returning({
           id: agent_sessions.id
         }).then(v => v[0].id)
+        sessionId = newSessionId
+
+        // 生成会话名也是一次真实请求，同样要记账
+        if (usage) {
+          await db.insert(agent_usage).values(toUsageRow(newSessionId, response_id, usage))
+        }
       }
   
-      const { response_id, output: newItems, usage } = await ask(question, history)
-      if (newItems) {
-        const startPosition = history.length
-        await saveTurn(sessionId!, startPosition, newItems, response_id, usage)
-        history.push(...newItems)
-      }
+      const { items, rounds } = await ask(question, history)
+      await saveTurn(sessionId!, history.length, items, rounds)
+      history.push(...items.map(v => v.item))
     }
   } finally {
     await TERMINATE_MCP()
