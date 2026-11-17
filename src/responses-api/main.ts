@@ -36,25 +36,18 @@ const instructions = [
   "7. 使用使用中文回答问题。"
 ].join('\n')
 
-/**
- * 一条待落库的 item 及其归属。
- * response_id 表示「产出/发起它的那一轮响应」，客户端自产（用户提问、兜底提示）为 null。
- */
-type SavedItem = {
-  item: OpenAI.Responses.ResponseInputItem
-  response_id: string | null
-}
-
 type ServerToolUse = NonNullable<typeof agent_usage.$inferInsert.server_tool_use>
 
 /** 一轮请求的 token 消耗；一次提问可能产生多轮，一轮一行 */
 type RoundUsage = {
   response_id: string
+  /** 本轮请求发送的消息条数：会话内 position < input_item_count 的消息都在本轮 input 里 */
+  input_item_count: number
   usage: OpenAI.Responses.ResponseUsage & { server_tool_use?: ServerToolUse | null } | null
 }
 
 type AskResponse = {
-  items: SavedItem[]
+  items: OpenAI.Responses.ResponseInputItem[]
   rounds: RoundUsage[]
 }
 
@@ -113,23 +106,27 @@ async function ask(
   history: OpenAI.Responses.ResponseInput,
   tools: OpenAI.Responses.Tool[]
 ): Promise<AskResponse> {
-  // 唯一的上下文状态：本次提问产生的全部 item（含归属 response_id），input 由它派生
-  const items: SavedItem[] = [{
-    item: { role: 'user', content: question, type: 'message' },
-    response_id: null,
-  }]
+  // 唯一的上下文状态：本次提问产生的全部 item，input 由它派生
+  const items: OpenAI.Responses.ResponseInputItem[] = [
+    { role: 'user', content: question, type: 'message' },
+  ]
   // 每次请求一条 usage，避免多轮工具调用时只记下最后一轮
   const rounds: RoundUsage[] = []
 
-  const buildInput = (): OpenAI.Responses.ResponseInput => [...history, ...items.map(v => v.item)]
-  const pushItems = (list: OpenAI.Responses.ResponseInputItem[], response_id: string | null) => {
-    items.push(...list.map(item => ({ item, response_id })))
+  const buildInput = (): OpenAI.Responses.ResponseInput => [...history, ...items]
+  const pushItems = (list: OpenAI.Responses.ResponseInputItem[]) => {
+    items.push(...list)
   }
   /** 记录一轮响应：记 usage，并把其 output 转成 item 入栈 */
   const recordResponse = (res: OpenAI.Responses.Response) => {
-    rounds.push({ response_id: res.id, usage: res.usage ?? null })
+    // 此时本轮 output 尚未入栈，history + items 正好就是这次请求发出的 input
+    rounds.push({
+      response_id: res.id,
+      input_item_count: history.length + items.length,
+      usage: res.usage ?? null,
+    })
     const outItems = toResponseInputItems(res.output)
-    pushItems(outItems, res.id)
+    pushItems(outItems)
     return outItems
   }
   /** 把客户端统计的工具次数写入对应轮次的 usage；全为 0 时直接跳过（如 pro 没有本地联网工具），保留服务端已返回的 server_tool_use */
@@ -226,7 +223,7 @@ async function ask(
           recordResponse(response)
 
           const { results: toolOutputs, server_tool_use } = await runToolCalls(response.output)
-          pushItems(toolOutputs, response.id)
+          pushItems(toolOutputs)
           addServerToolUse(response.id, server_tool_use)
 
           process.stdout.write(styleText('blueBright', '本轮回答生成完成\n'))
@@ -250,7 +247,7 @@ async function ask(
     role: 'developer',
     type: 'message',
     content: '工具调用次数已达上限。不要再调用工具，仅根据已有结果用中文总结：已完成项、未完成项，以及继续时最关键的一步。信息不足就明确说未完成。',
-  }], null)
+  }])
   const finalAnswer = await openai.responses.create({
     model: process.env.MODEL_NAME as string,
     instructions: instructions,
@@ -269,11 +266,13 @@ async function ask(
 function toUsageRow(
   sessionId: string,
   response_id: string | null,
-  usage: OpenAI.Responses.ResponseUsage
+  usage: OpenAI.Responses.ResponseUsage,
+  input_item_count: number | null = null,
 ) {
   return {
     session_id: sessionId,
     response_id,
+    input_item_count,
     input_tokens: usage.input_tokens,
     output_tokens: usage.output_tokens,
     total_tokens: usage.total_tokens,
@@ -286,18 +285,16 @@ function toUsageRow(
 async function saveTurn(
   sessionId: string, 
   startPosition: number, 
-  saveItems: SavedItem[],
+  saveItems: OpenAI.Responses.ResponseInputItem[],
   rounds: RoundUsage[],
 ) {
   // DatabaseSync 是同步驱动：transaction 回调不能是 async，事务内必须用 .run()
   db.transaction((tx) => {
     if (saveItems.length) {
       tx.insert(agent_messages).values(
-        saveItems.map((v, idx) => {
-          const item = v.item
+        saveItems.map((item, idx) => {
           return {
             session_id: sessionId,
-            response_id: v.response_id,
             position: startPosition + idx,
             type: item.type as string,
             role: get(item, 'role', null),
@@ -311,8 +308,8 @@ async function saveTurn(
 
     // 一轮一行：多轮工具调用时每轮都要记账
     const usageRows = rounds
-      .filter((r): r is { response_id: string; usage: OpenAI.Responses.ResponseUsage } => !!r.usage)
-      .map(r => toUsageRow(sessionId, r.response_id, r.usage))
+      .filter((r): r is RoundUsage & { usage: OpenAI.Responses.ResponseUsage } => !!r.usage)
+      .map(r => toUsageRow(sessionId, r.response_id, r.usage, r.input_item_count))
 
     if (usageRows.length) {
       tx.insert(agent_usage).values(usageRows).run()
@@ -411,7 +408,7 @@ async function main() {
   
       const { items, rounds } = await ask(question, history, tools)
       await saveTurn(sessionId!, history.length, items, rounds)
-      history.push(...items.map(v => v.item))
+      history.push(...items)
     }
   } finally {
     await TERMINATE_MCP()
