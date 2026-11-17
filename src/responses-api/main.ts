@@ -9,6 +9,7 @@ import { asc, eq } from 'drizzle-orm'
 import { get } from 'lodash-es'
 import { EXEC_TOOL, initTools, WORKSPACE_ROOT } from './tools.ts'
 import { applyPatch } from './applyDiff.ts'
+import { loadSkillsFrontmatter } from './skills.ts'
 
 const rl = createInterface({
   input: process.stdin,
@@ -19,13 +20,16 @@ const openai = new OpenAI({
   apiKey: process.env.API_KEY,
   baseURL: process.env.BASE_URL,
 });
+
+const skillsFrontmatter = await loadSkillsFrontmatter()
+
 const instructions = [
   `你是一个代码编辑助手由${process.env.MODEL_NAME}模型驱动，在用户的本地项目里工作。`,
-  "## 工具",
-  "- read_file：读取文件内容。",
-  "- apply_patch：修改文件，支持新建、更新、删除。",
-  "- 文档工具（搜索 / 抓取）：需要确认 API 用法、参数或版本行为时使用。",
-  "- get_current_time：问题涉及当前日期时间时使用。",
+  ...(skillsFrontmatter ? [
+    "## 可用 Skills",
+    "任务匹配某个 skill 的 description 时，先 read_file 读取它的 path，再按其中的步骤执行；skill 里的相对路径以该 skill 所在目录为基准。",
+    skillsFrontmatter,
+  ] : []),
   "## 规则",
   "1. 先读后改。没读过文件内容，就不要提交补丁。",
   "2. 改动要小。用精确替换，不要整文件重写。",
@@ -33,9 +37,10 @@ const instructions = [
   "4. 需要 API 细节时查文档，不要凭记忆写代码。",
   "5. 完成后直接说明改了哪个文件、改了什么、为什么。过程不要汇报计划。",
   "6. 需求不清楚就先问，不要猜着改。",
-  "7. 使用使用中文回答问题。"
+  "7. 使用中文回答问题。"
 ].join('\n')
 
+console.log(instructions)
 type ServerToolUse = NonNullable<typeof agent_usage.$inferInsert.server_tool_use>
 
 /** 一轮请求的 token 消耗；一次提问可能产生多轮，一轮一行 */
@@ -104,7 +109,7 @@ async function runToolCalls(
 async function ask(
   question: string, 
   history: OpenAI.Responses.ResponseInput,
-  tools: OpenAI.Responses.Tool[]
+  tools: OpenAI.Responses.Tool[],
 ): Promise<AskResponse> {
   // 唯一的上下文状态：本次提问产生的全部 item，input 由它派生
   const items: OpenAI.Responses.ResponseInputItem[] = [
@@ -375,6 +380,9 @@ async function main() {
     history = await loadHistory(sessionId)
   }
 
+  
+  
+
   const { tools, TERMINATE_MCP } = await initTools(process.env.MODEL_NAME as string)
 
   try {
@@ -384,7 +392,7 @@ async function main() {
       if (!question) {
         process.stdout.write(styleText('blueBright', '输入为空，请重新输入\n'))
         continue
-      }
+      } 
 
       if (question === '/exit') {
         process.stdout.write(styleText('blueBright', '退出程序\n'))
