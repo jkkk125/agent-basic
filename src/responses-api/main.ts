@@ -21,6 +21,9 @@ const openai = new OpenAI({
   baseURL: process.env.BASE_URL,
 });
 
+/** 终端里只预览工具输出的前 N 个字符，完整内容仍会回传给模型 */
+const TOOL_OUTPUT_PREVIEW_CHARS = 200
+
 const skillsFrontmatter = await loadSkillsFrontmatter()
 
 const instructions = [
@@ -99,7 +102,8 @@ async function runToolCalls(
     } catch (e) {
       result = `${call.name} 调用失败: ${(e as Error).message}`
     }
-    process.stdout.write(styleText('magenta', `工具调用结束，输出：${result.length} 个字符\n`))
+    const preview = result.length > TOOL_OUTPUT_PREVIEW_CHARS ? `${result.slice(0, TOOL_OUTPUT_PREVIEW_CHARS)}…` : result
+    process.stdout.write(styleText('magenta', `工具调用结束，输出：${result.length} 个字符\n${preview}\n`))
     results.push({ type: 'function_call_output', call_id: call.call_id, output: result })
   }
 
