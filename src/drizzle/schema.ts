@@ -34,5 +34,6 @@ export const agent_usage = sqliteTable('agent_usage', {
   total_tokens: integer('total_tokens').notNull(),
   input_tokens_details: text('input_tokens_details', { mode: 'json' }).$type<OpenAI.Responses.ResponseUsage.InputTokensDetails>().notNull(),
   output_tokens_details: text('output_tokens_details', { mode: 'json' }).$type<OpenAI.Responses.ResponseUsage.OutputTokensDetails>().notNull(),
+  server_tool_use: text('server_tool_use', { mode: 'json' }).$type<{ tool_search: number, tool_fetch: number, tool_image_search: number }>(),
   created_at: integer('created_at', { mode: 'timestamp_ms' }).$defaultFn(now).notNull(),
 })

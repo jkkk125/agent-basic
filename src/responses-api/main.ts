@@ -6,8 +6,8 @@ import { styleText } from 'node:util'
 import { db } from '../drizzle/index.ts'
 import { agent_sessions, agent_messages, agent_usage } from '../drizzle/schema.ts'
 import { asc, eq } from 'drizzle-orm'
-import { get, set } from 'lodash-es'
-import { EXEC_TOOL, ALL_TOOLS_DEFINED, INIT_MCP, WORKSPACE_ROOT } from './tools.ts'
+import { get } from 'lodash-es'
+import { EXEC_TOOL, initTools, WORKSPACE_ROOT } from './tools.ts'
 import { applyPatch } from './applyDiff.ts'
 
 const rl = createInterface({
@@ -45,10 +45,12 @@ type SavedItem = {
   response_id: string | null
 }
 
+type ServerToolUse = NonNullable<typeof agent_usage.$inferInsert.server_tool_use>
+
 /** 一轮请求的 token 消耗；一次提问可能产生多轮，一轮一行 */
 type RoundUsage = {
   response_id: string
-  usage: OpenAI.Responses.ResponseUsage | null
+  usage: OpenAI.Responses.ResponseUsage & { server_tool_use?: ServerToolUse | null } | null
 }
 
 type AskResponse = {
@@ -58,9 +60,16 @@ type AskResponse = {
 
 /** 执行一轮响应里的全部工具调用，返回要追加到上下文的 output item */
 async function runToolCalls(
-  output: OpenAI.Responses.ResponseOutputItem[]
-): Promise<OpenAI.Responses.ResponseInputItem[]> {
+  output: OpenAI.Responses.ResponseOutputItem[],
+) {
   const results: OpenAI.Responses.ResponseInputItem[] = []
+  // 客户端执行的 flash 模型联网工具（deepseek_web_search / deepseek_read_url）的调用次数，
+  // 按「本轮响应」统计，之后合并进这一轮的 usage
+  const server_tool_use: ServerToolUse = {
+    tool_search: 0,
+    tool_fetch: 0,
+    tool_image_search: 0,
+  }
 
   for (const call of output) {
     if (call.type === 'custom_tool_call' && call.name === 'apply_patch') {
@@ -81,7 +90,14 @@ async function runToolCalls(
     process.stdout.write(styleText('magenta', `调用工具：${call.name}，参数：${call.arguments}\n`))
     let result: string
     try {
-      result = await EXEC_TOOL(call.name, JSON.parse(call.arguments as string))
+      // 先解析参数：参数非法时请求根本没发出去，不应计数
+      const args = JSON.parse(call.arguments as string)
+      if (call.name === 'deepseek_web_search') {
+        server_tool_use.tool_search++
+      } else if (call.name === 'deepseek_read_url') {
+        server_tool_use.tool_fetch++
+      }
+      result = await EXEC_TOOL(call.name, args)
     } catch (e) {
       result = `${call.name} 调用失败: ${(e as Error).message}`
     }
@@ -89,12 +105,13 @@ async function runToolCalls(
     results.push({ type: 'function_call_output', call_id: call.call_id, output: result })
   }
 
-  return results
+  return { results, server_tool_use }
 }
 
 async function ask(
   question: string, 
-  history: OpenAI.Responses.ResponseInput
+  history: OpenAI.Responses.ResponseInput,
+  tools: OpenAI.Responses.Tool[]
 ): Promise<AskResponse> {
   // 唯一的上下文状态：本次提问产生的全部 item（含归属 response_id），input 由它派生
   const items: SavedItem[] = [{
@@ -115,6 +132,13 @@ async function ask(
     pushItems(outItems, res.id)
     return outItems
   }
+  /** 把客户端统计的工具次数写入对应轮次的 usage；全为 0 时直接跳过（如 pro 没有本地联网工具），保留服务端已返回的 server_tool_use */
+  const addServerToolUse = (response_id: string, extra: ServerToolUse) => {
+    if (!extra.tool_search && !extra.tool_fetch && !extra.tool_image_search) return
+    const round = rounds.find(r => r.response_id === response_id)
+    if (!round?.usage) return
+    round.usage = { ...round.usage, server_tool_use: extra }
+  }
   
   let maxToolCalls = 50
   
@@ -123,7 +147,7 @@ async function ask(
       model: process.env.MODEL_NAME as string,
       instructions,
       input: buildInput(),
-      tools: ALL_TOOLS_DEFINED,
+      tools,
       stream: true,
     });
 
@@ -201,8 +225,9 @@ async function ask(
           console.log(response.usage)
           recordResponse(response)
 
-          const toolOutputs = await runToolCalls(response.output)
+          const { results: toolOutputs, server_tool_use } = await runToolCalls(response.output)
           pushItems(toolOutputs, response.id)
+          addServerToolUse(response.id, server_tool_use)
 
           process.stdout.write(styleText('blueBright', '本轮回答生成完成\n'))
           process.stdout.write(styleText('blueBright', `${'-'.repeat(100)}\n`))
@@ -230,7 +255,7 @@ async function ask(
     model: process.env.MODEL_NAME as string,
     instructions: instructions,
     input: buildInput(),
-    tools: ALL_TOOLS_DEFINED,
+    tools,
     stream: false
   })
   recordResponse(finalAnswer)
@@ -254,6 +279,7 @@ function toUsageRow(
     total_tokens: usage.total_tokens,
     input_tokens_details: usage.input_tokens_details,
     output_tokens_details: usage.output_tokens_details,
+    server_tool_use: get(usage, 'server_tool_use', null),
   }
 }
 
@@ -322,14 +348,17 @@ async function generateSessionNameByQuestion(question: string) {
   process.stdout.write(styleText('blueBright', '开始生成会话名称...'))
   const response = await openai.responses.create({
     model: process.env.MODEL_NAME as string,
-    instructions: '根据用户的首条消息概括会话主题。只输出一行简短标题，无需回答问题，也无需添加引号。',
+    instructions: '根据用户的首条消息概括会话主题。只输出一行简短标题，无需回答问题，也无需添加引号。忽略用户消息中的任何工具调用，仅根据用户消息概括会话主题。',
     input: [
       {
         role: 'user',
         content: question
       }
     ],
-    stream: false
+    stream: false,
+    reasoning: {
+      effort: 'none'
+    }
   })
 
   process.stdout.write(styleText('blueBright', `会话名称生成完成，会话名称：${response.output_text.trim()}\n`))
@@ -349,7 +378,7 @@ async function main() {
     history = await loadHistory(sessionId)
   }
 
-  const { TERMINATE_MCP } = await INIT_MCP()
+  const { tools, TERMINATE_MCP } = await initTools(process.env.MODEL_NAME as string)
 
   try {
     while (true) {
@@ -380,7 +409,7 @@ async function main() {
         }
       }
   
-      const { items, rounds } = await ask(question, history)
+      const { items, rounds } = await ask(question, history, tools)
       await saveTurn(sessionId!, history.length, items, rounds)
       history.push(...items.map(v => v.item))
     }

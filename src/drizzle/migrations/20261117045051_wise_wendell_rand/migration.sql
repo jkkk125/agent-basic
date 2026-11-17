@@ -1,0 +1,1 @@
+ALTER TABLE `agent_usage` ADD `server_tool_use` text;
