@@ -27,7 +27,7 @@ const instructions = [
   `你是一个代码编辑助手由${process.env.MODEL_NAME}模型驱动，在用户的本地项目里工作。`,
   ...(skillsFrontmatter ? [
     "## 可用 Skills",
-    "任务匹配某个 skill 的 description 时，先 read_file 读取它的 path，再按其中的步骤执行；skill 里的相对路径以该 skill 所在目录为基准。",
+    "任务匹配某个 skill 的 description 时，先 read_file 读取它的 path，再按其中的步骤执行。",
     skillsFrontmatter,
   ] : []),
   "## 规则",

@@ -1,9 +1,11 @@
 ---
 name: my-commit
-description: 查看当前项目下的文件改动，生成commit message并提交
+description: 查看当前项目下的文件改动，生成commit message，提交并push到远程，之后运行回调脚本
 ---
 
 ## 步骤
+
+本文件里的路径都相对项目根目录。
 
 1. 运行 `git status` 和 `git diff`（已暂存的用 `git diff --staged`），了解改动内容。
 2. 按下面的格式生成 commit message。
