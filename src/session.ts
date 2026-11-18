@@ -1,8 +1,8 @@
 import type { OpenAI } from 'openai'
 import { asc, eq } from 'drizzle-orm'
 import { get } from 'lodash-es'
-import { db } from '../drizzle/index.ts'
-import { agent_sessions, agent_messages, agent_usage } from '../drizzle/schema.ts'
+import { db } from './drizzle/index.ts'
+import { agent_sessions, agent_messages, agent_usage } from './drizzle/schema.ts'
 import type { RoundUsage } from './types.ts'
 
 /** 会话标题，以及生成它的那次请求的记账信息 */

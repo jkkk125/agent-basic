@@ -1,5 +1,5 @@
 import type { OpenAI } from 'openai'
-import type { agent_usage } from '../drizzle/schema.ts'
+import type { agent_usage } from './drizzle/schema.ts'
 
 /** 客户端统计的联网工具调用次数，形状与 agent_usage.server_tool_use 列一致 */
 export type ServerToolUse = NonNullable<typeof agent_usage.$inferInsert.server_tool_use>
