@@ -15,8 +15,13 @@
 
 本仓库包含用 TypeScript 编写的 OpenAI API、MCP 工具实验，以及一个可持久化会话的命令行 agent。
 
-- `src/responses-api/main.ts`：交互式 agent、流式事件、对话历史和 usage 持久化。
-- `src/responses-api/tools.ts`：工具定义、shell/文件操作和 MCP 集成；`applyDiff.ts` 负责处理补丁。
+- `src/responses-api/main.ts`：入口。创建 client、系统提示和工具注册表，运行 REPL，把各模块接起来。
+- `src/responses-api/loop.ts`：agent 循环 `ask()`（请求模型 → 执行工具 → 再请求）。依赖全部由参数传入，自己不打印、不落库，通过 `onEvent` 回调对外发事件。
+- `src/responses-api/context.ts`：`buildInput()` 由完整记录派生出发给模型的 input；上下文管理（裁剪、摘要）在这里做。
+- `src/responses-api/prompt.ts`：组装系统提示（含 `skills.ts` 读出的 skills 摘要）。
+- `src/responses-api/render.ts`：把循环发出的事件（流式事件、工具调用、轮次结束）打印到终端。
+- `src/responses-api/session.ts`：会话持久化（读历史、存一轮对话、新建会话、起标题、usage 记账）；`types.ts` 放循环和持久化共用的类型。
+- `src/responses-api/tools/`：每个工具一个文件（定义和执行放在一起），`types.ts` 是统一的 `AgentTool` 接口，`registry.ts` 汇总工具并按名分发，`mcp.ts` 负责 MCP 集成，`applyDiff.ts` 负责处理补丁。
 - `src/drizzle/`：SQLite 连接（通过 `drizzle-orm/node-sqlite` 使用 Node 内置的 `node:sqlite`）、`schema.ts` 中的表定义，以及生成的迁移文件。
 - 其他 `src/*.ts` 文件：独立的 function calling 和结构化输出示例。
 
