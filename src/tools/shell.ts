@@ -156,7 +156,7 @@ export const runShellTool = defineFunctionTool({
   ].join('\n'),
   parameters: z.object({
     command: z.string().describe('要执行的完整命令，例如 `git status --short` 或 `ls -la src`'),
-    cwd: z.string().nullable().describe('工作目录，相对路径以项目根目录为基准且不能跳出项目；绝对路径可以指向项目外的其他目录'),
+    cwd: z.string().nullable().describe('工作目录。默认用 null（项目根）；相对路径以项目根为基准且不能跳出项目，当前目录写作字符串 "."（带引号），不要写裸的 .；绝对路径可指向项目外'),
     timeout_ms: z.number().nullable().describe('超时毫秒数，默认 60000，最大 300000'),
   }),
   execute: async (args) => {
