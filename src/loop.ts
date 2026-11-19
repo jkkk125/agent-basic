@@ -15,8 +15,8 @@ export type AgentOptions = {
 }
 
 export type AskResponse = {
+  /** 本次提问产生的全部 item；usage 已经通过 round_commit 事件逐轮交出，不在这里返回 */
   items: OpenAI.Responses.ResponseInputItem[]
-  rounds: RoundUsage[]
 }
 
 /** 执行一轮响应里的全部工具调用，返回要追加到上下文的 output item */
@@ -65,7 +65,7 @@ async function runToolCalls(
 /**
  * 处理一次提问：请求模型 → 执行它要求的工具 → 带着结果再请求，直到模型不再调用工具。
  * 每一轮结束时通过 round_commit 事件交出这一轮的增量，调用方据此即时保存；
- * 返回值是本次提问产生的全部 item 和每轮的 usage，调用方用来更新内存里的历史。
+ * 返回值是本次提问产生的全部 item，调用方用来更新内存里的历史。
  */
 export async function ask(
   question: string, 
@@ -137,12 +137,12 @@ export async function ask(
           // 未完成也要把已产出的 output 落库，否则库里只剩用户那条消息
           recordResponse(chunk.response)
           commitRound()
-          return { items, rounds }
+          return { items }
 
         case 'response.failed':
           recordResponse(chunk.response)
           commitRound()
-          return { items, rounds }
+          return { items }
 
         case 'response.completed': {
           const { response } = chunk
@@ -160,7 +160,7 @@ export async function ask(
           )
           if (!hasToolCall) {
             onEvent({ type: 'turn_end' })
-            return { items, rounds }
+            return { items }
           }
           break
         }
@@ -187,5 +187,5 @@ export async function ask(
 
   onEvent({ type: 'summary', text: finalAnswer.output_text })
 
-  return { items, rounds }
+  return { items }
 }
