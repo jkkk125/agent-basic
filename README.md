@@ -4,8 +4,8 @@
 
 ```bash
 pnpm install
-pnpm exec tsx src/responses-api/main.ts                    # 新会话
-pnpm exec tsx src/responses-api/main.ts --session <uuid>   # 恢复会话，/exit 退出
+pnpm exec tsx src/main.ts                    # 新会话
+pnpm exec tsx src/main.ts --session <uuid>   # 恢复会话，/exit 退出
 ```
 
 配置见 `AGENTS.md` 的 Security & Configuration 一节。
@@ -33,7 +33,7 @@ pnpm exec tsx src/responses-api/main.ts --session <uuid>   # 恢复会话，/exi
 - “库里存的”变成“发给模型的”只有一行 `[...history, ...items]`，没有独立的落点。
 - client、系统提示、MCP 连接都是模块级全局变量，没法用另一套配置再跑一个循环。
 
-**拆分结果**（都在 `src/responses-api/` 下）：
+**拆分结果**（都在 `src/` 下）：
 
 - `main.ts`：入口，创建依赖并运行 REPL。
 - `loop.ts`：`ask()` 循环，依赖全部由参数传入，不打印、不落库。
