@@ -1,6 +1,6 @@
 import type { OpenAI } from 'openai'
 import { toResponseInputItems } from 'openai/lib/responses/ResponseInputItems'
-import { buildInput } from './context.ts'
+import { buildInput, advanceBoundary, type ContextState } from './context.ts'
 import type { ToolRegistry } from './tools/registry.ts'
 import type { AgentEvent, RoundUsage, ServerToolUse } from './types.ts'
 
@@ -17,6 +17,8 @@ export type AgentOptions = {
 export type AskResponse = {
   /** 本次提问产生的全部 item；usage 已经通过 round_commit 事件逐轮交出，不在这里返回 */
   items: OpenAI.Responses.ResponseInputItem[]
+  /** 更新后的压缩状态，调用方保存起来，下次提问传回来 */
+  state: ContextState
 }
 
 /** 执行一轮响应里的全部工具调用，返回要追加到上下文的 output item */
@@ -65,11 +67,12 @@ async function runToolCalls(
 /**
  * 处理一次提问：请求模型 → 执行它要求的工具 → 带着结果再请求，直到模型不再调用工具。
  * 每一轮结束时通过 round_commit 事件交出这一轮的增量，调用方据此即时保存；
- * 返回值是本次提问产生的全部 item，调用方用来更新内存里的历史。
+ * 返回值是本次提问产生的全部 item（调用方用来更新内存里的历史）和更新后的压缩状态。
  */
 export async function ask(
   question: string, 
   history: OpenAI.Responses.ResponseInput,
+  state: ContextState,
   { client, model, instructions, registry, onEvent }: AgentOptions,
 ): Promise<AskResponse> {
   const tools = registry.specs
@@ -79,6 +82,9 @@ export async function ask(
   ]
   // 每次请求一条 usage，避免多轮工具调用时只记下最后一轮
   const rounds: RoundUsage[] = []
+  // 压缩状态：从上次提问接着用，本次提问内部更新，结束时交回
+  let { boundary, lastInputTokens } = state
+  const finish = (): AskResponse => ({ items, state: { boundary, lastInputTokens } })
 
   const pushItems = (list: OpenAI.Responses.ResponseInputItem[]) => {
     items.push(...list)
@@ -91,6 +97,8 @@ export async function ask(
       input_item_count: history.length + items.length,
       usage: res.usage ?? null,
     })
+    // 下一轮判断是否压缩要用：这是实际发出去的上下文大小
+    lastInputTokens = res.usage?.input_tokens ?? lastInputTokens
     const outItems = toResponseInputItems(res.output)
     pushItems(outItems)
     return outItems
@@ -120,10 +128,16 @@ export async function ask(
   let maxToolCalls = 50
   
   while (maxToolCalls--) {
+    const nextBoundary = advanceBoundary(history, items, lastInputTokens, boundary)
+    if (nextBoundary !== boundary) {
+      onEvent({ type: 'context_compacted', from: boundary, to: nextBoundary, input_tokens: lastInputTokens })
+      boundary = nextBoundary
+    }
+    const input = buildInput(history, items, boundary)
     const stream = await client.responses.create({
       model,
       instructions,
-      input: buildInput(history, items),
+      input,
       tools,
       stream: true,
     });
@@ -137,12 +151,12 @@ export async function ask(
           // 未完成也要把已产出的 output 落库，否则库里只剩用户那条消息
           recordResponse(chunk.response)
           commitRound()
-          return { items }
+          return finish()
 
         case 'response.failed':
           recordResponse(chunk.response)
           commitRound()
-          return { items }
+          return finish()
 
         case 'response.completed': {
           const { response } = chunk
@@ -160,7 +174,7 @@ export async function ask(
           )
           if (!hasToolCall) {
             onEvent({ type: 'turn_end' })
-            return { items }
+            return finish()
           }
           break
         }
@@ -178,7 +192,7 @@ export async function ask(
   const finalAnswer = await client.responses.create({
     model,
     instructions: instructions,
-    input: buildInput(history, items),
+    input: buildInput(history, items, boundary),
     tools,
     stream: false
   })
@@ -187,5 +201,5 @@ export async function ask(
 
   onEvent({ type: 'summary', text: finalAnswer.output_text })
 
-  return { items }
+  return finish()
 }

@@ -7,6 +7,7 @@ import { createSession, generateSessionNameByQuestion, loadHistory, saveTurn } f
 import { renderEvent } from './render.ts'
 import { buildInstructions } from './prompt.ts'
 import { ask } from './loop.ts'
+import type { ContextState } from './context.ts'
 
 const rl = createInterface({
   input: process.stdin,
@@ -24,6 +25,8 @@ async function main() {
   const [key, value] = process.argv.slice(2)
   let sessionId: string | undefined = undefined
   let history: OpenAI.Responses.ResponseInput = []
+  // 上下文压缩状态；恢复会话时从头开始，第一次请求之后才会按 input_tokens 判断
+  let contextState: ContextState = { boundary: 0, lastInputTokens: 0 }
   if (key === '--session') {
     sessionId = value
     console.log(`[${sessionId}] 开始加载历史会话... \n`)
@@ -62,7 +65,7 @@ async function main() {
       // 提前推进会让同一批 item 被重复发送，所以只记下一条消息的 position
       const currentSessionId = sessionId
       let nextPosition = history.length
-      const { items } = await ask(question, history, {
+      const { items, state } = await ask(question, history, contextState, {
         client: openai,
         model,
         instructions,
@@ -76,6 +79,7 @@ async function main() {
         },
       })
       history.push(...items)
+      contextState = state
     }
   } finally {
     await registry.close()

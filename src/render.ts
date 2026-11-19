@@ -112,6 +112,10 @@ export function renderEvent(event: AgentEvent) {
       process.stdout.write(styleText('blueBright', `${'-'.repeat(100)}\n`))
       break
 
+    case 'context_compacted':
+      process.stdout.write(styleText('yellow', `上下文压缩：上一轮 input_tokens=${event.input_tokens}，边界 ${event.from} → ${event.to}\n`))
+      break
+
     case 'turn_end':
       process.stdout.write(styleText('blueBright', `工具调用结束\n`))
       break
