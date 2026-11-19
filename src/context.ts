@@ -4,10 +4,11 @@ type Item = OpenAI.Responses.ResponseInputItem
 type ToolOutputItem = Extract<Item, { type: 'function_call_output' | 'custom_tool_call_output' }>
 
 /**
- * 触发压缩的默认阈值：上一轮请求的 input_tokens 超过它，就推进边界；可用环境变量 COMPACT_HIGH_TOKENS 覆盖。
- * 模型窗口是 1M，窗口不是瓶颈，这里按费用、延迟和长上下文下的注意力质量来定；调试时设成 8000 左右更容易触发。
+ * 触发压缩的阈值：上一轮请求的 input_tokens 超过它，就推进边界。
+ * 模型窗口是 1M，窗口不是瓶颈，这里按费用、延迟和长上下文下的注意力质量来定；调试时临时改成 8000 左右更容易触发。
  */
-const DEFAULT_HIGH_TOKENS = 100_000
+// const COMPACT_HIGH_TOKENS = 100_000
+const COMPACT_HIGH_TOKENS = 30_000
 /** 推进边界时，保留最近这么多个工具输出的原文 */
 const KEEP_RECENT_OUTPUTS = 8
 /** 太短的输出不值得替换（占位符本身也要几十个字符） */
@@ -61,8 +62,7 @@ export function advanceBoundary(
   lastInputTokens: number,
   boundary: number,
 ): number {
-  const highTokens = Number(process.env.COMPACT_HIGH_TOKENS) || DEFAULT_HIGH_TOKENS
-  if (lastInputTokens <= highTokens) return boundary
+  if (lastInputTokens <= COMPACT_HIGH_TOKENS) return boundary
 
   const outputIndexes: number[] = []
   ;[...history, ...items].forEach((item, index) => {
