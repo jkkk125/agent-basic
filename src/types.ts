@@ -20,6 +20,12 @@ export type AgentEvent =
   | { type: 'tool_end', call: ToolCall, output: string }
   /** 一轮请求连同它的工具调用全部结束 */
   | { type: 'round_end' }
+  /**
+   * 一轮的记录可以落库了：items 是上次提交之后新增的 item（第一轮包含用户那条消息），
+   * round 是这一轮的 usage。监听方负责保存；这个事件在每个出口都会发出，所以是同步处理的，
+   * 保存失败应直接抛错，让异常沿着 ask 冒出去，而不是悄悄丢数据。
+   */
+  | { type: 'round_commit', items: OpenAI.Responses.ResponseInputItem[], round: RoundUsage }
   /** 模型不再调用工具，本次提问结束 */
   | { type: 'turn_end' }
   /** 达到最大轮数，接下来会要求模型直接总结 */

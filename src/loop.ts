@@ -64,7 +64,8 @@ async function runToolCalls(
 
 /**
  * 处理一次提问：请求模型 → 执行它要求的工具 → 带着结果再请求，直到模型不再调用工具。
- * 返回本次提问产生的全部 item 和每轮的 usage，由调用方决定如何保存。
+ * 每一轮结束时通过 round_commit 事件交出这一轮的增量，调用方据此即时保存；
+ * 返回值是本次提问产生的全部 item 和每轮的 usage，调用方用来更新内存里的历史。
  */
 export async function ask(
   question: string, 
@@ -94,6 +95,20 @@ export async function ask(
     pushItems(outItems)
     return outItems
   }
+  // 已经通过 round_commit 交出去的 item 数；items[committed:] 就是下一次要提交的增量
+  let committed = 0
+  /**
+   * 提交一轮：把上次提交之后新增的 item 和这一轮的 usage 一起发给监听方。
+   * 所有出口都必须调用它，并且要在这一轮的 usage 和工具输出都定稿之后。
+   */
+  const commitRound = () => {
+    onEvent({
+      type: 'round_commit',
+      items: items.slice(committed),
+      round: rounds[rounds.length - 1],
+    })
+    committed = items.length
+  }
   /** 把客户端统计的工具次数写入对应轮次的 usage；全为 0 时直接跳过（如 pro 没有本地联网工具），保留服务端已返回的 server_tool_use */
   const addServerToolUse = (response_id: string, extra: ServerToolUse) => {
     if (!extra.tool_search && !extra.tool_fetch && !extra.tool_image_search) return
@@ -121,10 +136,12 @@ export async function ask(
         case 'response.incomplete':
           // 未完成也要把已产出的 output 落库，否则库里只剩用户那条消息
           recordResponse(chunk.response)
+          commitRound()
           return { items, rounds }
 
         case 'response.failed':
           recordResponse(chunk.response)
+          commitRound()
           return { items, rounds }
 
         case 'response.completed': {
@@ -134,6 +151,8 @@ export async function ask(
           const { results: toolOutputs, server_tool_use } = await runToolCalls(response.output, registry, onEvent)
           pushItems(toolOutputs)
           addServerToolUse(response.id, server_tool_use)
+          // 工具输出和 server_tool_use 都已定稿，function_call 与它的输出一起提交
+          commitRound()
 
           onEvent({ type: 'round_end' })
           const hasToolCall = response.output.some(
@@ -164,6 +183,7 @@ export async function ask(
     stream: false
   })
   recordResponse(finalAnswer)
+  commitRound()
 
   onEvent({ type: 'summary', text: finalAnswer.output_text })
 

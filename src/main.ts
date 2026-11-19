@@ -58,14 +58,23 @@ async function main() {
       }
       
   
-      const { items, rounds } = await ask(question, history, {
+      // 每轮结束即落库。这里不能提前 history.push：ask 每轮请求用的是 [...history, ...items]，
+      // 提前推进会让同一批 item 被重复发送，所以只记下一条消息的 position
+      const currentSessionId = sessionId
+      let nextPosition = history.length
+      const { items } = await ask(question, history, {
         client: openai,
         model,
         instructions,
         registry,
-        onEvent: renderEvent,
+        onEvent: (event) => {
+          renderEvent(event)
+          if (event.type === 'round_commit') {
+            saveTurn(currentSessionId, nextPosition, event.items, [event.round])
+            nextPosition += event.items.length
+          }
+        },
       })
-      await saveTurn(sessionId!, history.length, items, rounds)
       history.push(...items)
     }
   } finally {

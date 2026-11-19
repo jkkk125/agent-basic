@@ -97,8 +97,11 @@ export async function createSession({ name, response_id, usage }: SessionName) {
   return sessionId
 }
 
-/** 把一次提问产生的全部 item 和每轮 usage 在同一个事务里落库 */
-export async function saveTurn(
+/**
+ * 把一批 item 和对应轮次的 usage 在同一个事务里落库（目前是每轮调用一次）。
+ * 驱动是同步的，所以这里不是 async：出错会同步抛出，调用方不会因为漏写 await 而丢掉异常。
+ */
+export function saveTurn(
   sessionId: string, 
   startPosition: number, 
   saveItems: OpenAI.Responses.ResponseInputItem[],
