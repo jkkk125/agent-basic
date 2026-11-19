@@ -18,6 +18,7 @@ function toUsageRow(
   response_id: string | null,
   usage: OpenAI.Responses.ResponseUsage,
   input_item_count: number | null = null,
+  source: typeof agent_usage.$inferSelect.source
 ) {
   return {
     session_id: sessionId,
@@ -29,6 +30,7 @@ function toUsageRow(
     input_tokens_details: usage.input_tokens_details,
     output_tokens_details: usage.output_tokens_details,
     server_tool_use: get(usage, 'server_tool_use', null),
+    source,
   }
 }
 
@@ -89,7 +91,7 @@ export async function createSession({ name, response_id, usage }: SessionName) {
 
   // 生成会话名也是一次真实请求，同样要记账
   if (usage) {
-    await db.insert(agent_usage).values(toUsageRow(sessionId, response_id, usage))
+    await db.insert(agent_usage).values(toUsageRow(sessionId, response_id, usage, null, 'session_title'))
   }
 
   return sessionId
@@ -123,7 +125,7 @@ export async function saveTurn(
     // 一轮一行：多轮工具调用时每轮都要记账
     const usageRows = rounds
       .filter((r): r is RoundUsage & { usage: OpenAI.Responses.ResponseUsage } => !!r.usage)
-      .map(r => toUsageRow(sessionId, r.response_id, r.usage, r.input_item_count))
+      .map(r => toUsageRow(sessionId, r.response_id, r.usage, r.input_item_count, 'agent_round'))
 
     if (usageRows.length) {
       tx.insert(agent_usage).values(usageRows).run()

@@ -38,4 +38,5 @@ export const agent_usage = sqliteTable('agent_usage', {
   output_tokens_details: text('output_tokens_details', { mode: 'json' }).$type<OpenAI.Responses.ResponseUsage.OutputTokensDetails>().notNull(),
   server_tool_use: text('server_tool_use', { mode: 'json' }).$type<{ tool_search: number, tool_fetch: number, tool_image_search: number }>(),
   created_at: integer('created_at', { mode: 'timestamp_ms' }).$defaultFn(now).notNull(),
+  source: text('source', {enum: ['agent_round', 'session_title', 'summary']}).notNull(),
 })
