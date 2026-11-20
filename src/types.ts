@@ -27,7 +27,7 @@ export type AgentEvent =
    */
   | { type: 'round_commit', items: OpenAI.Responses.ResponseInputItem[], round: RoundUsage }
   /** 上下文压缩边界向前推进了：from → to，input_tokens 是触发它的那一轮的请求大小 */
-  | { type: 'context_compacted', from: number, to: number, input_tokens: number }
+  | { type: 'context_compacted', from: number, to: number, input_tokens: number, estimated_tokens: number }
   /** 模型不再调用工具，本次提问结束 */
   | { type: 'turn_end' }
   /** 达到最大轮数，接下来会要求模型直接总结 */

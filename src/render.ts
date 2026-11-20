@@ -113,7 +113,7 @@ export function renderEvent(event: AgentEvent) {
       break
 
     case 'context_compacted':
-      process.stdout.write(styleText('yellow', `上下文压缩：上一轮 input_tokens=${event.input_tokens}，边界 ${event.from} → ${event.to}\n`))
+      process.stdout.write(styleText('yellow', `上下文压缩：上一轮 input_tokens=${event.input_tokens}，当前估算=${event.estimated_tokens}，边界 ${event.from} → ${event.to}\n`))
       break
 
     case 'turn_end':

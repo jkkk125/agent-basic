@@ -17,11 +17,18 @@ const MIN_COMPACT_CHARS = 200
  * 跨提问保留的压缩状态，每个会话一份。
  * boundary：拼接后的数组（history + items）里，下标小于它的工具输出显示为占位符。只增不减。
  * lastInputTokens：上一轮请求的 input_tokens，也就是实际发出去的上下文大小。
+ * lastInputItemCount：上一轮请求发出时 history + items 的 item 总数。
+ *   下标 >= 它的 item 是那次请求之后才产生的（上一轮的模型输出、工具输出、新提问），
+ *   lastInputTokens 里没有它们，需要另行估算。
  */
 export type ContextState = {
   boundary: number
   lastInputTokens: number
+  lastInputItemCount: number
 }
+
+/** 粗估：中英文、代码、JSON 混合文本，平均约 3 个字符 1 个 token。只用来补上“还没被计入”的那一小段 */
+const CHARS_PER_TOKEN = 3
 
 function isToolOutput(item: Item): item is ToolOutputItem {
   return item.type === 'function_call_output' || item.type === 'custom_tool_call_output'
@@ -51,6 +58,23 @@ export function buildInput(
 }
 
 /**
+ * 估算当前上下文的 token 数：上一轮实测值 + 上一轮请求之后新增 item 的估算值。
+ * 实测值衡量的是压缩后实际发出去的内容，所以不能拿原始列表去替代它；
+ * 只有“尚未被实测覆盖”的尾部才需要估算。
+ */
+export function estimateContextTokens(
+  history: OpenAI.Responses.ResponseInput,
+  items: Item[],
+  lastInputTokens: number,
+  lastInputItemCount: number,
+): number {
+  const unseenChars = [...history, ...items]
+    .slice(lastInputItemCount)
+    .reduce((sum, item) => sum + JSON.stringify(item).length, 0)
+  return lastInputTokens + Math.ceil(unseenChars / CHARS_PER_TOKEN)
+}
+
+/**
  * 决定要不要把边界往前推。
  * 没超过阈值就原样返回；超过了，就推进到“最近 KEEP_RECENT_OUTPUTS 个工具输出”之前。
  * 边界只会前进，不会后退。
@@ -58,10 +82,10 @@ export function buildInput(
 export function advanceBoundary(
   history: OpenAI.Responses.ResponseInput,
   items: Item[],
-  lastInputTokens: number,
+  estimatedTokens: number,
   boundary: number,
 ): number {
-  if (lastInputTokens <= COMPACT_HIGH_TOKENS) return boundary
+  if (estimatedTokens <= COMPACT_HIGH_TOKENS) return boundary
 
   const outputIndexes: number[] = []
   ;[...history, ...items].forEach((item, index) => {
