@@ -8,7 +8,12 @@
 ### Removed
 
 - 去掉自动压缩：删除 `estimateContextTokens`、`advanceBoundary`，以及只给它们用的 `COMPACT_HIGH_TOKENS`、`KEEP_RECENT_OUTPUTS`、`CHARS_PER_TOKEN`；`loop.ts` 的 `ask()` 不再在每轮请求前估算和推进边界；`context_compacted` 事件连同 `render.ts` 里的展示一起删除。
-- `ContextState` 去掉 `lastInputItemCount`，只剩 `boundary` 和 `lastInputTokens`。
+- 清理上下文状态：`ContextState`（`boundary`、`lastInputTokens`）整体删除。`boundary` 没有代码推进、恒为 0；`lastInputTokens` 只写不读。随之删除 `ask()` 的 `state` 参数和返回值、`main.ts` 里的 `contextState` 变量，以及整个 `src/context.ts`（`buildInput`、`isToolOutput`、`MIN_COMPACT_CHARS`）。`ask()` 里 `input` 直接用 `[...history, ...items]`。
+- 去掉 `--session` 启动参数，同时删除 `.vscode/launch.json` 里传这个参数的“加载历史记录”配置；`README.md`、`AGENTS.md` 的用法说明同步改成运行中的 `/session`。
+
+### Added
+
+- `/session <id>`：在运行中切换会话。先 `getSessionInfo` + `loadHistory` 加载，成功后才替换 `sessionId` 和 `history`；失败（如会话不存在）只打印错误，当前会话原样保留。只输入 `/session` 会显示当前会话 id 和用法。命令按空白拆成“命令 + 参数”再比较。
 
 ### Why
 
@@ -16,22 +21,27 @@
 - 自动压缩在用户不知道的时候改变发给模型的内容，不好观察和对比。改成用户主动 `/compact`，时机由人决定，没有抖动。
 - 方向调整：`/compact` 计划做成“让模型总结旧上下文”，而不是只替换工具输出。替换工具输出只作为摘要前的前置步骤（先把旧的长工具输出换成占位符，再交给摘要模型，让摘要请求更小）。
 
-### Kept
+### 现状与取舍
 
-- `buildInput` 和 `boundary` 保留。现在没有代码推进 `boundary`，它恒为 0，`buildInput` 等于原样返回，所以上下文会一路增长，直到 `/compact` 做出来。
-- `lastInputTokens` 仍然在 `recordResponse` 里记录，但暂时没有人读，留给之后的“每次提问结束后提示上下文大小”和 `/context` 命令。
+- 现在没有任何上下文压缩，上下文会一路增长，直到 `/compact` 做出来。
+- 不为将来保留死代码：`buildInput`、`boundary` 都删了，做摘要时按当时的需要重写（占位符替换只是摘要前的前置步骤，切点会是一次性参数，不是跨提问的状态）。
+- 之后要显示上下文大小，不需要内存状态：提问结束的提示可以用 `round_commit` 事件里的 `round.usage.input_tokens`；`/context` 按需查该会话最近一条 `agent_usage`（`source = 'agent_round'`）的 `input_tokens`。没有压缩时，它就是当前上下文的实际大小。
 
 ### 已知局限 / 待办
 
-- `main.ts` 里的 `/compact` 目前只是占位：只打印 `compact`，之后没有 `continue`，会继续把它当问题发给模型。
-- 摘要要持久化：摘要文本由模型生成，不能像占位符那样由 `boundary` 重新算出来，恢复会话（`--session`）时需要一个存放位置（`agent_sessions` 加列或新表），且不应写进 `agent_messages`，那里存的是原始记录。
+- `main.ts` 里的 `/compact` 目前只是占位：只打印 `compact` 后 `continue`，不做任何事。
+- 切换会话时没有处理“上一轮因 `response.incomplete` 等原因中断、`history` 末尾可能是没有输出的 `function_call`”这种脏历史。
+- 摘要要持久化：摘要文本由模型生成，不能由切点重新算出来，切换会话（`/session`）时需要一个存放位置（`agent_sessions` 加列或新表），且不应写进 `agent_messages`，那里存的是原始记录。
 - 摘要的切点不能把 `function_call` 与其输出、`reasoning` 与其后续 item 切开；建议只落在某条用户消息之前。
 - 摘要请求带着 `function_call` 条目，是否要同时传 `tools`、`reasoning` item 是否要剔除，取决于所用接口，需要实测。
 
 ### 验证
 
-- `pnpm exec tsc --noEmit` 通过；`src` 里搜不到 `advanceBoundary`、`estimateContextTokens`、`lastInputItemCount`、`context_compacted`、`COMPACT_HIGH_TOKENS`、`KEEP_RECENT_OUTPUTS` 的残留。
-- 尚未用真实模型验证。建议：跑一个会读大文件的会话，确认不再出现“上下文压缩”那行，并查 `agent_usage`，同一会话的 `input_tokens` 应该只涨不落。
+- `pnpm exec tsc --noEmit` 通过；`src` 里搜不到 `advanceBoundary`、`estimateContextTokens`、`ContextState`、`lastInputTokens`、`boundary`、`buildInput`、`context_compacted` 的残留。
+- 尚未用真实模型验证。建议：
+  - 跑一个会读大文件的会话，确认不再出现“上下文压缩”那行，并查 `agent_usage`，同一会话的 `input_tokens` 应该只涨不落。
+  - `/session <另一个会话 id>` 后追问只有那个会话才知道的内容，模型应答得出来；查 `agent_messages`，新消息写进目标会话、`position` 连续，原会话不增行。
+  - `/session 乱写的id` 应报错且程序不退出，之后提问仍写进切换前的会话。
 
 ## 2026-11-20
 

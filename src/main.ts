@@ -7,8 +7,6 @@ import { createSession, generateSessionNameByQuestion, loadHistory, getSessionIn
 import { renderEvent } from './render.ts'
 import { buildInstructions } from './prompt.ts'
 import { ask } from './loop.ts'
-import type { ContextState } from './context.ts'
-
 const rl = createInterface({
   input: process.stdin,
   output: process.stdout,
@@ -22,11 +20,9 @@ const openai = new OpenAI({
 const model = process.env.MODEL_NAME as string
 
 async function main() {
-  // 当前会话 = 下面三个变量，切换会话时必须整体替换；没有 sessionId 表示还没创建，第一次提问时才建
+  // 当前会话 = 下面两个变量，切换会话时必须整体替换；没有 sessionId 表示还没创建，第一次提问时才建
   let sessionId: string | undefined = undefined
   let history: OpenAI.Responses.ResponseInput = []
-  // 上下文状态；切换会话后没有实测值（lastInputTokens=0），发一次请求后才会有
-  let contextState: ContextState = { boundary: 0, lastInputTokens: 0 }
 
   const [registry, instructions] = await Promise.all([
     createToolRegistry(model),
@@ -67,7 +63,6 @@ async function main() {
           // const sessionName = 
           sessionId = targetId
           history = sessionHistory
-          contextState = { boundary: 0, lastInputTokens: 0 }
           process.stdout.write(styleText('blueBright', `已切换到会话 sessionId: ${sessionId} name: ${sessionInfo.name}，共 ${history.length} 条消息\n`))
         } catch (e) {
           process.stdout.write(styleText('redBright', `切换会话失败：${(e as Error).message}\n`))
@@ -87,7 +82,7 @@ async function main() {
       // 提前推进会让同一批 item 被重复发送，所以只记下一条消息的 position
       const currentSessionId = sessionId
       let nextPosition = history.length
-      const { items, state } = await ask(question, history, contextState, {
+      const { items } = await ask(question, history, {
         client: openai,
         model,
         instructions,
@@ -101,7 +96,6 @@ async function main() {
         },
       })
       history.push(...items)
-      contextState = state
     }
   } finally {
     await registry.close()

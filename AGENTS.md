@@ -17,7 +17,6 @@
 
 - `src/main.ts`：入口。创建 client、系统提示和工具注册表，运行 REPL，把各模块接起来。
 - `src/loop.ts`：agent 循环 `ask()`（请求模型 → 执行工具 → 再请求）。依赖全部由参数传入，自己不打印、不落库，通过 `onEvent` 回调对外发事件。
-- `src/context.ts`：`buildInput()` 由完整记录派生出发给模型的 input；上下文管理（裁剪、摘要）在这里做。
 - `src/prompt.ts`：组装系统提示（含 `skills.ts` 读出的 skills 摘要）。
 - `src/render.ts`：把循环发出的事件（流式事件、工具调用、轮次结束）打印到终端。
 - `src/session.ts`：会话持久化（读历史、存一轮对话、新建会话、起标题、usage 记账）；`types.ts` 放循环和持久化共用的类型。
