@@ -55,6 +55,7 @@ async function main() {
 
       if (question === '/compact') {
         console.log('compact')
+        continue
       }
   
       if (!sessionId) {
