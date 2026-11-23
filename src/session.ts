@@ -34,6 +34,19 @@ function toUsageRow(
   }
 }
 
+export async function getSessionInfo(sessionId: string) {
+  const session = await db.select().from(agent_sessions).where(
+    eq(agent_sessions.id, sessionId)
+  )
+
+  if (session.length === 0) {
+    throw new Error(`Session ${sessionId} not found`)
+  }
+
+  return session[0]
+  
+}
+
 /** 按 position 顺序取出会话的全部消息；会话不存在时抛错 */
 export async function loadHistory(sessionId: string) {
   const session = await db.select().from(agent_sessions).where(

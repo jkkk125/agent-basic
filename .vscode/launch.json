@@ -14,21 +14,6 @@
       ],
       "program": "${workspaceFolder}/src/main.ts",
       "console": "integratedTerminal"
-    },
-    {
-      "type": "node",
-      "request": "launch",
-      "name": "加载历史记录",
-      "skipFiles": [
-        "<node_internals>/**",
-        "node_modules/**"
-      ],
-      "program": "${workspaceFolder}/src/main.ts",
-      "args": [
-        "--session",
-        "55408577-d9d4-42bc-a166-96af9f9d96f1"
-      ],
-      "console": "integratedTerminal"
     }
   ]
 }

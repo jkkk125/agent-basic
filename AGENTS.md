@@ -33,7 +33,7 @@
 
 - `pnpm install`：安装依赖。
 - `pnpm exec tsx src/main.ts`：在仓库根目录启动交互式 agent。
-- `pnpm exec tsx src/main.ts --session <uuid>`：恢复已保存的会话；输入 `/exit` 退出。
+- 运行中输入 `/session <uuid>` 切换到已保存的会话，输入 `/exit` 退出。
 - `pnpm exec tsx src/index.ts`：运行独立的 function calling 示例。
 - `pnpm exec tsc --noEmit`：只做类型检查，不生成 JavaScript。
 - `pnpm exec drizzle-kit generate`：根据 schema 变更生成迁移，供人工审阅。
