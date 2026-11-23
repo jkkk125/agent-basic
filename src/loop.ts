@@ -1,6 +1,6 @@
 import type { OpenAI } from 'openai'
 import { toResponseInputItems } from 'openai/lib/responses/ResponseInputItems'
-import { buildInput, advanceBoundary, estimateContextTokens, type ContextState } from './context.ts'
+import { buildInput, type ContextState } from './context.ts'
 import type { ToolRegistry } from './tools/registry.ts'
 import type { AgentEvent, RoundUsage, ServerToolUse } from './types.ts'
 
@@ -83,8 +83,9 @@ export async function ask(
   // 每次请求一条 usage，避免多轮工具调用时只记下最后一轮
   const rounds: RoundUsage[] = []
   // 压缩状态：从上次提问接着用，本次提问内部更新，结束时交回
-  let { boundary, lastInputTokens, lastInputItemCount } = state
-  const finish = (): AskResponse => ({ items, state: { boundary, lastInputTokens, lastInputItemCount } })
+  const { boundary } = state
+  let { lastInputTokens } = state
+  const finish = (): AskResponse => ({ items, state: { boundary, lastInputTokens } })
 
   const pushItems = (list: OpenAI.Responses.ResponseInputItem[]) => {
     items.push(...list)
@@ -97,12 +98,8 @@ export async function ask(
       input_item_count: history.length + items.length,
       usage: res.usage ?? null,
     })
-    // 下一轮判断是否压缩要用：这是实际发出去的上下文大小
-    // 实测值和它对应的 item 数必须一起更新：只有 usage 存在时才配对，否则沿用旧的一对
-    if (res.usage) {
-      lastInputTokens = res.usage.input_tokens
-      lastInputItemCount = history.length + items.length
-    }
+    // 这是实际发出去的上下文大小；usage 缺失时沿用旧值
+    if (res.usage) lastInputTokens = res.usage.input_tokens
     const outItems = toResponseInputItems(res.output)
     pushItems(outItems)
     return outItems
@@ -132,18 +129,6 @@ export async function ask(
   let maxToolCalls = 50
   
   while (maxToolCalls--) {
-    const estimatedTokens = estimateContextTokens(history, items, lastInputTokens, lastInputItemCount)
-    const nextBoundary = advanceBoundary(history, items, estimatedTokens, boundary)
-    if (nextBoundary !== boundary) {
-      onEvent({
-        type: 'context_compacted',
-        from: boundary,
-        to: nextBoundary,
-        input_tokens: lastInputTokens,
-        estimated_tokens: estimatedTokens,
-      })
-      boundary = nextBoundary
-    }
     const input = buildInput(history, items, boundary)
     const stream = await client.responses.create({
       model,

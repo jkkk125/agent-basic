@@ -3,32 +3,20 @@ import type { OpenAI } from 'openai'
 type Item = OpenAI.Responses.ResponseInputItem
 type ToolOutputItem = Extract<Item, { type: 'function_call_output' | 'custom_tool_call_output' }>
 
-/**
- * 触发压缩的阈值：上一轮请求的 input_tokens 超过它，就推进边界。
- * 模型窗口是 1M，窗口不是瓶颈，这里按费用、延迟和长上下文下的注意力质量来定；调试时临时改成 8000 左右更容易触发。
- */
-const COMPACT_HIGH_TOKENS = 100_000
-/** 推进边界时，保留最近这么多个工具输出的原文 */
-const KEEP_RECENT_OUTPUTS = 8
 /** 太短的输出不值得替换（占位符本身也要几十个字符） */
 const MIN_COMPACT_CHARS = 200
 
 /**
- * 跨提问保留的压缩状态，每个会话一份。
- * boundary：拼接后的数组（history + items）里，下标小于它的工具输出显示为占位符。只增不减。
- * lastInputTokens：上一轮请求的 input_tokens，也就是实际发出去的上下文大小。
- * lastInputItemCount：上一轮请求发出时 history + items 的 item 总数。
- *   下标 >= 它的 item 是那次请求之后才产生的（上一轮的模型输出、工具输出、新提问），
- *   lastInputTokens 里没有它们，需要另行估算。
+ * 跨提问保留的上下文状态，每个会话一份。
+ * 目前没有任何代码会推进 boundary，它恒为 0，buildInput 等于原样返回；
+ * 保留它是因为后面做 /compact 时，替换旧工具输出这一步还要用。
+ * boundary：拼接后的数组（history + items）里，下标小于它的工具输出显示为占位符。
+ * lastInputTokens：上一轮请求的 input_tokens，也就是实际发出去的上下文大小；恢复会话后是 0，表示还没有实测值。
  */
 export type ContextState = {
   boundary: number
   lastInputTokens: number
-  lastInputItemCount: number
 }
-
-/** 粗估：中英文、代码、JSON 混合文本，平均约 3 个字符 1 个 token。只用来补上“还没被计入”的那一小段 */
-const CHARS_PER_TOKEN = 3
 
 function isToolOutput(item: Item): item is ToolOutputItem {
   return item.type === 'function_call_output' || item.type === 'custom_tool_call_output'
@@ -55,43 +43,4 @@ export function buildInput(
       output: `[旧工具输出已省略，原长 ${item.output.length} 个字符；如需内容请重新调用工具]`,
     }
   })
-}
-
-/**
- * 估算当前上下文的 token 数：上一轮实测值 + 上一轮请求之后新增 item 的估算值。
- * 实测值衡量的是压缩后实际发出去的内容，所以不能拿原始列表去替代它；
- * 只有“尚未被实测覆盖”的尾部才需要估算。
- */
-export function estimateContextTokens(
-  history: OpenAI.Responses.ResponseInput,
-  items: Item[],
-  lastInputTokens: number,
-  lastInputItemCount: number,
-): number {
-  const unseenChars = [...history, ...items]
-    .slice(lastInputItemCount)
-    .reduce((sum, item) => sum + JSON.stringify(item).length, 0)
-  return lastInputTokens + Math.ceil(unseenChars / CHARS_PER_TOKEN)
-}
-
-/**
- * 决定要不要把边界往前推。
- * 没超过阈值就原样返回；超过了，就推进到“最近 KEEP_RECENT_OUTPUTS 个工具输出”之前。
- * 边界只会前进，不会后退。
- */
-export function advanceBoundary(
-  history: OpenAI.Responses.ResponseInput,
-  items: Item[],
-  estimatedTokens: number,
-  boundary: number,
-): number {
-  if (estimatedTokens <= COMPACT_HIGH_TOKENS) return boundary
-
-  const outputIndexes: number[] = []
-  ;[...history, ...items].forEach((item, index) => {
-    if (isToolOutput(item)) outputIndexes.push(index)
-  })
-  if (outputIndexes.length <= KEEP_RECENT_OUTPUTS) return boundary
-
-  return Math.max(boundary, outputIndexes[outputIndexes.length - KEEP_RECENT_OUTPUTS])
 }

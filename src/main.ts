@@ -25,9 +25,8 @@ async function main() {
   const [key, value] = process.argv.slice(2)
   let sessionId: string | undefined = undefined
   let history: OpenAI.Responses.ResponseInput = []
-  // 上下文压缩状态；恢复会话时没有实测值（lastInputItemCount=0），
-  // 第一次请求前会把整段历史按字符数估算，所以过长的历史不用等一次请求才被压缩
-  let contextState: ContextState = { boundary: 0, lastInputTokens: 0, lastInputItemCount: 0 }
+  // 上下文状态；恢复会话时没有实测值（lastInputTokens=0），发一次请求后才会有
+  let contextState: ContextState = { boundary: 0, lastInputTokens: 0 }
   if (key === '--session') {
     sessionId = value
     console.log(`[${sessionId}] 开始加载历史会话... \n`)
@@ -52,6 +51,10 @@ async function main() {
       if (question === '/exit') {
         process.stdout.write(styleText('blueBright', '退出程序\n'))
         break
+      }
+
+      if (question === '/compact') {
+        console.log('compact')
       }
   
       if (!sessionId) {
