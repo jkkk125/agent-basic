@@ -11,7 +11,7 @@ description: 查看当前项目下的文件改动，生成commit message，提�
 2. 按下面的格式生成 commit message。
 3. 运行 `git add` 添加相关文件，再 `git commit -m "<message>"`。不要提交 `.env`、`data/`、`*.db` 等敏感或被忽略的文件。
 4. 运行 `git push`。
-5. push 成功后，运行 `node .agents/skills/my-commit/scripts/callback.mjs`。push 失败则不要运行，直接告诉用户失败原因。
+5. push 成功后，运行 `node .agents/skills/my-commit/scripts/callback.ts`。push 失败则不要运行，直接告诉用户失败原因。
 
 ## commit message 格式
 
