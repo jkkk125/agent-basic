@@ -67,7 +67,7 @@ async function runToolCalls(
  * 返回值是本次提问产生的全部 item（调用方用来更新内存里的历史）。
  */
 export async function ask(
-  question: string, 
+  question: string,
   history: OpenAI.Responses.ResponseInput,
   { client, model, instructions, registry, onEvent }: AgentOptions,
 ): Promise<AskResponse> {
@@ -116,9 +116,9 @@ export async function ask(
     if (!round?.usage) return
     round.usage = { ...round.usage, server_tool_use: extra }
   }
-  
+
   let maxToolCalls = 50
-  
+
   while (maxToolCalls--) {
     const input = [...history, ...items]
     const stream = await client.responses.create({
