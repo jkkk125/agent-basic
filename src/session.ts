@@ -1,5 +1,5 @@
 import type { OpenAI } from 'openai'
-import { and, asc, desc, eq, max } from 'drizzle-orm'
+import { and, asc, desc, eq, gte, max } from 'drizzle-orm'
 import { get } from 'lodash-es'
 import { db } from './drizzle/index.ts'
 import { agent_sessions, agent_messages, agent_usage } from './drizzle/schema.ts'
@@ -48,7 +48,11 @@ export async function getSessionInfo(sessionId: string) {
 
 }
 
-/** 按 position 顺序取出会话的全部消息；会话不存在时抛错 */
+/**
+ * 按 position 顺序取出会话当前生效的上下文视图；会话不存在时抛错。
+ * 如果该会话做过 /compact，只从最新一条 compaction_summary 开始加载，
+ * 避免切换会话时把已压缩的旧历史重新复活。
+ */
 export async function loadHistory(sessionId: string) {
   const session = await db.select().from(agent_sessions).where(
     eq(agent_sessions.id, sessionId)
@@ -58,10 +62,25 @@ export async function loadHistory(sessionId: string) {
     throw new Error(`Session ${sessionId} not found`)
   }
 
+  const latestSummary = await db
+    .select({ maxPosition: max(agent_messages.position) })
+    .from(agent_messages)
+    .where(and(
+      eq(agent_messages.session_id, sessionId),
+      eq(agent_messages.type, COMPACTION_SUMMARY_TYPE),
+    ))
+
+  const startPosition = latestSummary[0]?.maxPosition == null
+    ? 0
+    : Number(latestSummary[0].maxPosition)
+
   const messages = await db.select({
     item: agent_messages.item,
   }).from(agent_messages).where(
-    eq(agent_messages.session_id, sessionId)
+    and(
+      eq(agent_messages.session_id, sessionId),
+      gte(agent_messages.position, startPosition),
+    )
   ).orderBy(asc(agent_messages.position))
 
   return messages.map(v => v.item)
