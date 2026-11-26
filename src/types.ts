@@ -36,7 +36,7 @@ export type AgentEvent =
 /** 一轮请求的 token 消耗；一次提问可能产生多轮，一轮一行 */
 export type RoundUsage = {
   response_id: string
-  /** 本轮请求发送的消息条数：会话内 position < input_item_count 的消息都在本轮 input 里 */
+  /** 本轮请求实际发送的 input item 条数（压缩后为当前活动视图条数，不再等同于从 position 0 起的全量条数） */
   input_item_count: number
   usage: OpenAI.Responses.ResponseUsage & { server_tool_use?: ServerToolUse | null } | null
 }

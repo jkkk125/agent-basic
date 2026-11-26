@@ -28,8 +28,8 @@ export const agent_usage = sqliteTable('agent_usage', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   session_id: text('session_id').notNull().references(() => agent_sessions.id),
   response_id: text('response_id'),
-  // 这次请求的 input 包含的 agent_messages 条数：input 恒为会话消息的前缀，
-  // 即 position < input_item_count 的消息都参与了本次请求。独立请求（如生成会话名）为 null
+  // 这次请求实际发送的 input item 条数（压缩前对应全量前缀，压缩后是从最新 compaction_summary 起的活动视图）。
+  // 独立请求（如生成会话名）为 null
   input_item_count: integer('input_item_count'),
   input_tokens: integer('input_tokens').notNull(),
   output_tokens: integer('output_tokens').notNull(),
