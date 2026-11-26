@@ -3,7 +3,7 @@ import { OpenAI } from 'openai'
 import { createInterface } from 'readline/promises'
 import { styleText } from 'node:util'
 import { createToolRegistry } from './tools/registry.ts'
-import { createSession, generateSessionNameByQuestion, loadHistory, getSessionInfo, saveTurn } from './session.ts'
+import { createSession, generateSessionNameByQuestion, getLatestRoundUsage, getSessionInfo, loadHistory, saveTurn } from './session.ts'
 import { renderEvent } from './render.ts'
 import { buildInstructions } from './prompt.ts'
 import { ask } from './loop.ts'
@@ -18,6 +18,54 @@ const openai = new OpenAI({
 });
 
 const model = process.env.MODEL_NAME as string
+
+async function printContextInfo(
+  sessionId: string | undefined,
+  history: OpenAI.Responses.ResponseInput,
+) {
+  const lines: string[] = [
+    `当前会话：${sessionId ?? '（尚未创建）'}`,
+    `上下文消息数：${history.length}`,
+  ]
+
+  if (history.length > 0) {
+    const byType = new Map<string, { count: number, chars: number }>()
+    let totalChars = 0
+    for (const item of history) {
+      const type = item.type ?? 'unknown'
+      const chars = JSON.stringify(item).length
+      totalChars += chars
+      const entry = byType.get(type) ?? { count: 0, chars: 0 }
+      entry.count += 1
+      entry.chars += chars
+      byType.set(type, entry)
+    }
+
+    lines.push(`内存上下文总字符数（JSON）：${totalChars}`)
+    const sorted = [...byType.entries()].sort((a, b) => b[1].chars - a[1].chars)
+    for (const [type, stat] of sorted) {
+      const pct = totalChars > 0 ? ((stat.chars / totalChars) * 100).toFixed(1) : '0.0'
+      lines.push(`  - ${type}: ${stat.count} 条，${stat.chars} 字符（${pct}%）`)
+    }
+  }
+
+  if (sessionId) {
+    const latest = await getLatestRoundUsage(sessionId)
+    if (latest) {
+      const cached = latest.input_tokens_details?.cached_tokens ?? 0
+      const hitRate = latest.input_tokens > 0
+        ? ((cached / latest.input_tokens) * 100).toFixed(1)
+        : '0.0'
+      lines.push(
+        `最近一轮实测（agent_round）：input_tokens=${latest.input_tokens}，cached_tokens=${cached}（命中率 ${hitRate}%），output_tokens=${latest.output_tokens}，input_item_count=${latest.input_item_count ?? 'null'}`,
+      )
+    } else {
+      lines.push('最近一轮实测：暂无 agent_round 记账记录')
+    }
+  }
+
+  process.stdout.write(styleText('blueBright', `${lines.join('\n')}\n`))
+}
 
 async function main() {
   // 当前会话 = 下面两个变量，切换会话时必须整体替换；没有 sessionId 表示还没创建，第一次提问时才建
@@ -41,6 +89,11 @@ async function main() {
       if (question === '/exit') {
         process.stdout.write(styleText('blueBright', '退出程序\n'))
         break
+      }
+
+      if (question === '/context') {
+        await printContextInfo(sessionId, history)
+        continue
       }
 
       if (question === '/compact') {
@@ -77,11 +130,10 @@ async function main() {
         sessionId = await createSession(sessionName)
       }
 
-  
-      // 每轮结束即落库。这里不能提前 history.push：ask 每轮请求用的是 [...history, ...items]，
-      // 提前推进会让同一批 item 被重复发送，所以只记下一条消息的 position
+
+      // 每轮结束即落库。这里仍不能提前 history.push：ask 每轮请求用的是 [...history, ...items]，
+      // 提前推进会让同一批 item 被重复发送；落库 position 由 saveTurn 在事务内按 SQL 顺延
       const currentSessionId = sessionId
-      let nextPosition = history.length
       const { items } = await ask(question, history, {
         client: openai,
         model,
@@ -90,8 +142,7 @@ async function main() {
         onEvent: (event) => {
           renderEvent(event)
           if (event.type === 'round_commit') {
-            saveTurn(currentSessionId, nextPosition, event.items, [event.round])
-            nextPosition += event.items.length
+            saveTurn(currentSessionId, event.items, [event.round])
           }
         },
       })

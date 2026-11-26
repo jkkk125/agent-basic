@@ -1,5 +1,5 @@
 import type { OpenAI } from 'openai'
-import { asc, eq } from 'drizzle-orm'
+import { and, asc, desc, eq, max } from 'drizzle-orm'
 import { get } from 'lodash-es'
 import { db } from './drizzle/index.ts'
 import { agent_sessions, agent_messages, agent_usage } from './drizzle/schema.ts'
@@ -110,19 +110,38 @@ export async function createSession({ name, response_id, usage }: SessionName) {
   return sessionId
 }
 
+/** 读取会话最近一条 agent_round 的 usage，供 /context 展示当前上下文实测大小 */
+export async function getLatestRoundUsage(sessionId: string) {
+  const rows = await db
+    .select()
+    .from(agent_usage)
+    .where(and(eq(agent_usage.session_id, sessionId), eq(agent_usage.source, 'agent_round')))
+    .orderBy(desc(agent_usage.id))
+    .limit(1)
+
+  return rows[0] ?? null
+}
+
 /**
  * 把一批 item 和对应轮次的 usage 在同一个事务里落库（目前是每轮调用一次）。
+ * position 在事务内按库里当前最大值顺延，不再依赖调用方内存里的 history.length。
  * 驱动是同步的，所以这里不是 async：出错会同步抛出，调用方不会因为漏写 await 而丢掉异常。
  */
 export function saveTurn(
-  sessionId: string, 
-  startPosition: number, 
+  sessionId: string,
   saveItems: OpenAI.Responses.ResponseInputItem[],
   rounds: RoundUsage[],
 ) {
-  // DatabaseSync 是同步驱动：transaction 回调不能是 async，事务内必须用 .run()
+  // DatabaseSync 是同步驱动：transaction 回调不能是 async，事务内必须用 .run() / .get()
   db.transaction((tx) => {
     if (saveItems.length) {
+      const row = tx
+        .select({ maxPosition: max(agent_messages.position) })
+        .from(agent_messages)
+        .where(eq(agent_messages.session_id, sessionId))
+        .get()
+      const startPosition = row?.maxPosition == null ? 0 : Number(row.maxPosition) + 1
+
       tx.insert(agent_messages).values(
         saveItems.map((item, idx) => {
           return {
