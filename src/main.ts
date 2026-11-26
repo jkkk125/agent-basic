@@ -7,6 +7,7 @@ import { createSession, generateSessionNameByQuestion, getLatestRoundUsage, getS
 import { renderEvent } from './render.ts'
 import { buildInstructions } from './prompt.ts'
 import { ask } from './loop.ts'
+import { generateCompactSummary } from './compact.ts'
 const rl = createInterface({
   input: process.stdin,
   output: process.stdout,
@@ -96,12 +97,39 @@ async function main() {
         continue
       }
 
-      if (question === '/compact') {
-        console.log('compact')
+      const [command, targetId] = question.split(/\s+/)
+      if (command === '/compact') {
+        if (!sessionId || history.length === 0) {
+          process.stdout.write(styleText('blueBright', '当前还没有可压缩的对话历史\n'))
+          continue
+        }
+        const focus = question.slice('/compact'.length).trim() || undefined
+        process.stdout.write(styleText('blueBright', '正在生成上下文摘要（Step 2.1 预览：暂不落库、不替换 history）...\n'))
+        try {
+          const result = await generateCompactSummary(history, {
+            client: openai,
+            model,
+            instructions,
+            tools: registry.specs,
+            focus,
+          })
+          process.stdout.write(styleText('greenBright', `\n--- 摘要预览 ---\n${result.summary}\n--- 预览结束 ---\n`))
+          if (result.usage) {
+            const cached = result.usage.input_tokens_details?.cached_tokens ?? 0
+            const hitRate = result.usage.input_tokens > 0
+              ? ((cached / result.usage.input_tokens) * 100).toFixed(1)
+              : '0.0'
+            process.stdout.write(styleText(
+              'blueBright',
+              `摘要请求 usage：input_tokens=${result.usage.input_tokens}，cached_tokens=${cached}（命中率 ${hitRate}%），output_tokens=${result.usage.output_tokens}，input_item_count=${result.input_item_count}\n`,
+            ))
+          }
+        } catch (e) {
+          process.stdout.write(styleText('redBright', `生成摘要失败：${(e as Error).message}\n`))
+        }
         continue
       }
 
-      const [command, targetId] = question.split(/\s+/)
       if (command === '/session') {
         if (!targetId) {
           process.stdout.write(styleText('blueBright', `当前会话：${sessionId ?? '（尚未创建）'}\n用法：/session <会话 id>\n`))
