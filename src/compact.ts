@@ -1,5 +1,8 @@
 import type { OpenAI } from 'openai'
 
+/** agent_messages.type 里用于标记压缩摘要边界的专用值，避免与 OpenAI 原生 item.type 冲突 */
+export const COMPACTION_SUMMARY_TYPE = 'compaction_summary' as const
+
 export type CompactOptions = {
   client: OpenAI
   model: string
@@ -75,5 +78,14 @@ export async function generateCompactSummary(
     response_id: response.id,
     input_item_count: input.length,
     usage: response.usage ?? null,
+  }
+}
+
+/** 把摘要文本包装成可放进 history 开头的 developer 消息 */
+export function toCompactionSummaryItem(summary: string): OpenAI.Responses.ResponseInputItem {
+  return {
+    type: 'message',
+    role: 'developer',
+    content: `以下是此前对话的压缩摘要，请据此继续与用户协作：\n\n${summary}`,
   }
 }

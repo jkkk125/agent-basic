@@ -3,6 +3,7 @@ import { and, asc, desc, eq, max } from 'drizzle-orm'
 import { get } from 'lodash-es'
 import { db } from './drizzle/index.ts'
 import { agent_sessions, agent_messages, agent_usage } from './drizzle/schema.ts'
+import { COMPACTION_SUMMARY_TYPE, type CompactResult } from './compact.ts'
 import type { RoundUsage } from './types.ts'
 
 /** 会话标题，以及生成它的那次请求的记账信息 */
@@ -44,7 +45,7 @@ export async function getSessionInfo(sessionId: string) {
   }
 
   return session[0]
-  
+
 }
 
 /** 按 position 顺序取出会话的全部消息；会话不存在时抛错 */
@@ -52,7 +53,7 @@ export async function loadHistory(sessionId: string) {
   const session = await db.select().from(agent_sessions).where(
     eq(agent_sessions.id, sessionId)
   )
-  
+
   if (session.length === 0) {
     throw new Error(`Session ${sessionId} not found`)
   }
@@ -122,6 +123,52 @@ export async function getLatestRoundUsage(sessionId: string) {
   return rows[0] ?? null
 }
 
+type DbTx = Parameters<Parameters<typeof db.transaction>[0]>[0]
+
+/** 在同步事务内计算该会话下一条消息的 position */
+function getNextPosition(tx: DbTx, sessionId: string): number {
+  const row = tx
+    .select({ maxPosition: max(agent_messages.position) })
+    .from(agent_messages)
+    .where(eq(agent_messages.session_id, sessionId))
+    .get()
+  return row?.maxPosition == null ? 0 : Number(row.maxPosition) + 1
+}
+
+/**
+ * 把一次手动 /compact 的结果原子落库：
+ * - agent_messages 追加一行 type = 'compaction_summary'（item 本身仍是合法的 developer message）
+ * - agent_usage 追加一行 source = 'summary'
+ */
+export function saveCompactionSummary(
+  sessionId: string,
+  summaryItem: OpenAI.Responses.ResponseInputItem,
+  result: CompactResult,
+) {
+  db.transaction((tx) => {
+    const position = getNextPosition(tx, sessionId)
+    tx.insert(agent_messages).values({
+      session_id: sessionId,
+      position,
+      type: COMPACTION_SUMMARY_TYPE,
+      role: get(summaryItem, 'role', null),
+      tool_name: null,
+      call_id: null,
+      item: summaryItem,
+    }).run()
+
+    if (result.usage) {
+      tx.insert(agent_usage).values(
+        toUsageRow(sessionId, result.response_id, result.usage, result.input_item_count, 'summary'),
+      ).run()
+    }
+
+    tx.update(agent_sessions).set({
+      updated_at: new Date(),
+    }).where(eq(agent_sessions.id, sessionId)).run()
+  })
+}
+
 /**
  * 把一批 item 和对应轮次的 usage 在同一个事务里落库（目前是每轮调用一次）。
  * position 在事务内按库里当前最大值顺延，不再依赖调用方内存里的 history.length。
@@ -135,12 +182,7 @@ export function saveTurn(
   // DatabaseSync 是同步驱动：transaction 回调不能是 async，事务内必须用 .run() / .get()
   db.transaction((tx) => {
     if (saveItems.length) {
-      const row = tx
-        .select({ maxPosition: max(agent_messages.position) })
-        .from(agent_messages)
-        .where(eq(agent_messages.session_id, sessionId))
-        .get()
-      const startPosition = row?.maxPosition == null ? 0 : Number(row.maxPosition) + 1
+      const startPosition = getNextPosition(tx, sessionId)
 
       tx.insert(agent_messages).values(
         saveItems.map((item, idx) => {

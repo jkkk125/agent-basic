@@ -3,11 +3,11 @@ import { OpenAI } from 'openai'
 import { createInterface } from 'readline/promises'
 import { styleText } from 'node:util'
 import { createToolRegistry } from './tools/registry.ts'
-import { createSession, generateSessionNameByQuestion, getLatestRoundUsage, getSessionInfo, loadHistory, saveTurn } from './session.ts'
+import { createSession, generateSessionNameByQuestion, getLatestRoundUsage, getSessionInfo, loadHistory, saveCompactionSummary, saveTurn } from './session.ts'
 import { renderEvent } from './render.ts'
 import { buildInstructions } from './prompt.ts'
 import { ask } from './loop.ts'
-import { generateCompactSummary } from './compact.ts'
+import { generateCompactSummary, toCompactionSummaryItem } from './compact.ts'
 const rl = createInterface({
   input: process.stdin,
   output: process.stdout,
@@ -104,7 +104,7 @@ async function main() {
           continue
         }
         const focus = question.slice('/compact'.length).trim() || undefined
-        process.stdout.write(styleText('blueBright', '正在生成上下文摘要（Step 2.1 预览：暂不落库、不替换 history）...\n'))
+        process.stdout.write(styleText('blueBright', '正在生成上下文摘要...\n'))
         try {
           const result = await generateCompactSummary(history, {
             client: openai,
@@ -113,7 +113,13 @@ async function main() {
             tools: registry.specs,
             focus,
           })
-          process.stdout.write(styleText('greenBright', `\n--- 摘要预览 ---\n${result.summary}\n--- 预览结束 ---\n`))
+          const beforeCount = history.length
+          const summaryItem = toCompactionSummaryItem(result.summary)
+          saveCompactionSummary(sessionId, summaryItem, result)
+          history = [summaryItem]
+
+          process.stdout.write(styleText('greenBright', `\n--- 压缩摘要 ---\n${result.summary}\n--- 摘要结束 ---\n`))
+          process.stdout.write(styleText('blueBright', `上下文已压缩：${beforeCount} 条 → ${history.length} 条\n`))
           if (result.usage) {
             const cached = result.usage.input_tokens_details?.cached_tokens ?? 0
             const hitRate = result.usage.input_tokens > 0
