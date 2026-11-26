@@ -28,7 +28,7 @@
 
 ## 构建、测试与开发命令
 
-使用 pnpm；`package.json` 声明的版本为 pnpm `^11.13.1`。
+使用 pnpm 作为包管理器。
 
 - `pnpm install`：安装依赖。
 - `pnpm exec tsx src/main.ts`：在仓库根目录启动交互式 agent。
