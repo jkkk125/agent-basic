@@ -3,6 +3,47 @@
 按日期倒序，新记录写在最前面。每条记：改了什么、为什么、怎么验证、哪些还没验证。
 2026-11-18 及之前的探索和拆分记录在 `docs/learning-log.md`，不再往那里追加。
 
+## 2026-11-26
+
+### Added
+
+- `/context`：打印当前会话内存 `history` 的消息条数、按 `item.type` 分组的 JSON 字符数及占比，并查询该会话最近一条 `agent_usage`（`source = 'agent_round'`）展示实测 `input_tokens`、`cached_tokens` 命中率、`output_tokens` 与 `input_item_count`。
+- 手动全量压缩 `/compact [额外关注点]`：
+  - 新增 `src/compact.ts`：`generateCompactSummary()` 采用 **A1 策略**（原样复用 `instructions`、`tools` 与当前 `history`，只在末尾追加结构化总结指令的 `user` 消息）；`toCompactionSummaryItem()` 把摘要包成 `role: 'developer'` 的 `ResponseInputItem`。
+  - `session.ts` 新增 `saveCompactionSummary()`：无需改动表结构，在同步事务内往 `agent_messages` 追加一条 `type = 'compaction_summary'`、`role = 'developer'` 的记录，并把摘要请求写入 `agent_usage`（`source = 'summary'`）；落库后内存 `history` 重置为 `[summaryItem]`。
+
+### Changed
+
+- `saveTurn()` 去掉 `startPosition` 参数，改为在 SQLite 同步事务内通过 `MAX(position) + 1`（抽为 `getNextPosition()`，与 `saveCompactionSummary()` 共用）顺延序号，不再依赖调用方内存里的 `history.length`。
+- `loadHistory()` 改为先查该会话最新一条 `type = 'compaction_summary'` 的 `position`（无则为 `0`），只加载 `position >= startPosition` 的消息，避免 `/session` 切换时把已压缩的旧历史重新加载回来。
+- 更新 `schema.ts` 和 `types.ts` 中 `input_item_count` 的注释，明确其语义为“本轮实际发送的 input item 条数”。
+
+### 学到的 / 实测发现
+
+- **`tool_choice: 'none'` 会破坏 Prompt Cache 前缀**：实测对比发现，摘要请求传 `tool_choice: 'none'` 时，服务端会把约 3000 token 的 `tools` 定义从模型输入中剥离，`input_tokens` 从 3720 骤降到 791，但前缀在第 128 token 处即分叉，`cached_tokens` 掉到 128（16.2%）。去掉 `tool_choice: 'none'`、改由提示词约束不调用工具后，同场景下 `cached_tokens` 回到 3712 / 3952（93.9%），按 64-token 缓存块几乎 100% 命中可缓存前缀。
+- **携带工具调用与 `reasoning` 的摘要请求兼容性**：在含大量 `function_call` / `function_call_output` / `reasoning` 的真实会话（`99ef1c48-f90a-4300-9d3b-d00b17f9e547`，35 条消息）中，A1 摘要请求一次通过且 `cached_tokens = 6912 / 7284`（94.9%）；`role: 'developer'` 作为压缩后 `input[0]` 也被接口正常接受。
+- **压缩后的缓存重建与成本曲线**（同一会话 `agent_usage` 实测）：
+  - 压缩前最后一轮：`input_item_count=34`，`input_tokens=6804`，`cached_tokens=6656`（97.8%）；
+  - 压缩后第 1 轮：`input_item_count=2`，`input_tokens=4653`，`cached_tokens=3328`（71.5%）——`instructions + tools` 固定前缀缓存并未失效，仅新摘要部分未命中；
+  - 压缩后第 2~5 轮：命中率迅速从 91.1% 回到 97.1%。
+  - 摘要输出本身消耗了 `output_tokens=1605`（含思考 token），短会话过早 `/compact` 不一定划算，高收益出现在读入大量大文件工具输出的长会话中。
+- **Event Log 边界标记的取舍**：全量压 + `compaction_summary` 行追加到 `agent_messages` 实现了零迁移、二次 `/compact` 自动基于“上次摘要 + 新消息”滚动压缩；代价是若未来改成“保留最近 N 轮原始消息”，不能再简单按 `position >= latestSummaryPos` 查询。
+
+### 已知局限 / 待办
+
+- 当上下文已经逼近模型窗口上限时，A1 原样发送整段 `history` 仍可能超窗，后续需要按需叠加前置瘦身（先替换旧的长工具输出再摘要）作为兜底。
+- 尚未处理 `response.incomplete` 中断导致 `history` 末尾残留悬空 `function_call` 的脏历史。
+- 后续统计会话原始消息数时需过滤 `type != 'compaction_summary'`。
+
+### 验证
+
+- `pnpm exec tsc --noEmit` 通过。
+- 真实模型验证（`deepseek-flash`）：
+  - 对照验证去掉 `tool_choice: 'none'` 前后的 `cached_tokens` 命中率（16.2% → 93.9%）。
+  - 在包含 `my-commit` 多轮工具调用的会话 `99ef1c48-f90a-4300-9d3b-d00b17f9e547` 执行 `/compact` 并继续追问多轮，核对 `agent_messages`（`position 0..34` 保留、`35` 为 `compaction_summary`、`36..52` 连续递增）与 `agent_usage`（`source = 'summary'` 及随后 `agent_round` 的 `input_tokens` / `cached_tokens` 变化）。
+  - 实测 `loadHistory()`：已压缩会话只从最新 `compaction_summary` 加载（首条为 `role: 'developer'`），未压缩会话仍从 `position = 0` 全量加载。
+- 尚未用真实模型验证：同一会话连续执行两次 `/compact` 后的滚动摘要质量与 `/session` 恢复。
+
 ## 2026-11-23
 
 ### Removed

@@ -5,7 +5,7 @@
 ```bash
 pnpm install
 pnpm exec tsx src/main.ts                    # 启动，第一次提问时创建新会话
-# 运行中：/session <uuid> 切换到已保存的会话，/exit 退出
+# 运行中：/context 查看上下文占用，/compact [关注点] 压缩上下文，/session <uuid> 切换会话，/exit 退出
 ```
 
 配置见 `AGENTS.md` 的 Security & Configuration 一节。
