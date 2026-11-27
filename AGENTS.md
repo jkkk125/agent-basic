@@ -31,9 +31,9 @@
 使用 pnpm 作为包管理器。
 
 - `pnpm install`：安装依赖。
-- `pnpm exec tsx src/main.ts`：在仓库根目录启动交互式 agent。
+- `node src/main.ts`：在仓库根目录启动交互式 agent。
 - 运行中输入 `/session <uuid>` 切换到已保存的会话，输入 `/exit` 退出。
-- `pnpm exec tsx src/index.ts`：运行独立的 function calling 示例。
+- `node src/index.ts`：运行独立的 function calling 示例。
 - `pnpm exec tsc --noEmit`：只做类型检查，不生成 JavaScript。
 - `pnpm exec drizzle-kit generate`：根据 schema 变更生成迁移，供人工审阅。
 - `pnpm exec drizzle-kit migrate`：把迁移应用到已配置的数据库；执行前先确认目标库。

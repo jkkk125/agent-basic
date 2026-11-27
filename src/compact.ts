@@ -15,6 +15,7 @@ export type CompactOptions = {
 export type CompactResult = {
   summary: string
   response_id: string
+  model: string
   input_item_count: number
   usage: OpenAI.Responses.ResponseUsage | null
 }
@@ -76,6 +77,7 @@ export async function generateCompactSummary(
   return {
     summary,
     response_id: response.id,
+    model,
     input_item_count: input.length,
     usage: response.usage ?? null,
   }

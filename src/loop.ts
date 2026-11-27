@@ -88,6 +88,7 @@ export async function ask(
     // 此时本轮 output 尚未入栈，history + items 正好就是这次请求发出的 input
     rounds.push({
       response_id: res.id,
+      model,
       input_item_count: history.length + items.length,
       usage: res.usage ?? null,
     })

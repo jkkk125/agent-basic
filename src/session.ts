@@ -10,6 +10,7 @@ import type { RoundUsage } from './types.ts'
 export type SessionName = {
   name: string
   response_id: string
+  model: string
   usage: OpenAI.Responses.ResponseUsage | null
 }
 
@@ -19,7 +20,8 @@ function toUsageRow(
   response_id: string | null,
   usage: OpenAI.Responses.ResponseUsage,
   input_item_count: number | null = null,
-  source: typeof agent_usage.$inferSelect.source
+  source: typeof agent_usage.$inferSelect.source,
+  model: string | null = null,
 ) {
   return {
     session_id: sessionId,
@@ -32,6 +34,7 @@ function toUsageRow(
     output_tokens_details: usage.output_tokens_details,
     server_tool_use: get(usage, 'server_tool_use', null),
     source,
+    model,
   }
 }
 
@@ -110,12 +113,13 @@ export async function generateSessionNameByQuestion(
   return {
     name: response.output_text.trim(),
     response_id: response.id,
+    model,
     usage: response.usage ?? null,
   }
 }
 
 /** 新建会话，返回会话 id */
-export async function createSession({ name, response_id, usage }: SessionName) {
+export async function createSession({ name, response_id, model, usage }: SessionName) {
   const sessionId = await db.insert(agent_sessions).values({
     name,
   }).returning({
@@ -124,7 +128,7 @@ export async function createSession({ name, response_id, usage }: SessionName) {
 
   // 生成会话名也是一次真实请求，同样要记账
   if (usage) {
-    await db.insert(agent_usage).values(toUsageRow(sessionId, response_id, usage, null, 'session_title'))
+    await db.insert(agent_usage).values(toUsageRow(sessionId, response_id, usage, null, 'session_title', model))
   }
 
   return sessionId
@@ -178,7 +182,7 @@ export function saveCompactionSummary(
 
     if (result.usage) {
       tx.insert(agent_usage).values(
-        toUsageRow(sessionId, result.response_id, result.usage, result.input_item_count, 'summary'),
+        toUsageRow(sessionId, result.response_id, result.usage, result.input_item_count, 'summary', result.model),
       ).run()
     }
 
@@ -221,7 +225,7 @@ export function saveTurn(
     // 一轮一行：多轮工具调用时每轮都要记账
     const usageRows = rounds
       .filter((r): r is RoundUsage & { usage: OpenAI.Responses.ResponseUsage } => !!r.usage)
-      .map(r => toUsageRow(sessionId, r.response_id, r.usage, r.input_item_count, 'agent_round'))
+      .map(r => toUsageRow(sessionId, r.response_id, r.usage, r.input_item_count, 'agent_round', r.model))
 
     if (usageRows.length) {
       tx.insert(agent_usage).values(usageRows).run()

@@ -1,10 +1,12 @@
 import { mkdirSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { drizzle } from 'drizzle-orm/node-sqlite';
+import { migrate } from 'drizzle-orm/node-sqlite/migrator';
+import { getDbPath, getMigrationsDir } from '../paths.ts';
 
-const dbPath = resolve('./data/agent.db');
-mkdirSync(dirname(dbPath), { recursive: true });
+const dbPath = getDbPath();
+mkdirSync(dirname(dbPath), { recursive: true, mode: 0o700 });
 
 const client = new DatabaseSync(dbPath);
 client.exec('PRAGMA journal_mode = WAL');
@@ -14,4 +16,7 @@ export const db = drizzle({
   client,
   // logger: true,
 });
+
+// 启动时自动应用尚未执行的 SQL 迁移（幂等）
+migrate(db, { migrationsFolder: getMigrationsDir() });
 

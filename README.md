@@ -4,7 +4,7 @@
 
 ```bash
 pnpm install
-pnpm exec tsx src/main.ts                    # 启动，第一次提问时创建新会话
+node src/main.ts                             # 启动，第一次提问时创建新会话
 # 运行中：/context 查看上下文占用，/compact [关注点] 压缩上下文，/session <uuid> 切换会话，/exit 退出
 ```
 

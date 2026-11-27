@@ -3,6 +3,48 @@
 按日期倒序，新记录写在最前面。每条记：改了什么、为什么、怎么验证、哪些还没验证。
 2026-11-18 及之前的探索和拆分记录在 `docs/learning-log.md`，不再往那里追加。
 
+## 2026-11-27
+
+### Added
+
+- 用户目录底座与启动自动迁移：
+  - 新增 `src/paths.ts`：统一提供 `getCodaHome()`（`~/.coda`）、`getDbPath()`（`~/.coda/coda.db`）和 `getMigrationsDir()`（基于 `import.meta.dirname` 寻址，确保发包后在任意工作目录运行都能找到 SQL 迁移）。
+  - `src/drizzle/index.ts` 创建目录时收紧权限为 `0o700`，并在初始化 `db` 后同步调用 `migrate(db, { migrationsFolder })` 自动建表与升级；`drizzle.config.ts` 复用 `getDbPath()` 消除路径双份硬编码。
+- SQLite 模型配置双表与配置服务：
+  - `src/drizzle/schema.ts` 新增 `providers`（`name`、`base_url`、`api_key`）与 `models`（`provider_id` 外键 `ON DELETE CASCADE`、`name` 别名、`model_id`、`is_active`），并为 `models.is_active` 建立部分唯一索引 `idx_models_single_active (WHERE is_active = 1)`；`agent_usage` 新增可空列 `model`。
+  - 生成迁移 `src/drizzle/migrations/20261127101807_add_providers_and_models/migration.sql`。
+  - 新增 `src/config.ts`：封装 Provider/Model CRUD、`maskApiKey()` 脱敏展示及 `setActiveModel()` 原子切换。
+- `/model` 交互管理命令：
+  - 新增 `src/model-command.ts` 并接入 `src/main.ts`，支持 `/model`、`/model add`、`/model use <别名>`、`/model rm <别名>` 以及 `/model provider [add|edit|rm]`，支持运行期热切换与编辑供应商 Key 后自动刷新当前激活运行时。
+
+### Changed
+
+- 彻底摆脱 `.env` 与 `dotenv`：
+  - `src/main.ts` 移除 `import 'dotenv/config'` 及顶层硬编码的 `OpenAI` 实例与 `model`，改为 `AgentRuntime` 动态构建；支持无配置冷启动引导；`/context` 同步展示当前生效模型。
+  - `src/tools/deepseek.ts` 改为工厂函数 `createDeepseekWebSearchTool(getApiKey)` / `createDeepseekReadUrlTool(getApiKey)`，消除对 `process.env.API_KEY` 的直接读取。
+  - `src/tools/registry.ts` 将进程级 MCP 连接（`connectSharedMcp()`）与按模型组装工具表（`buildToolRegistry()`）解耦，切模型时不重连、不泄漏 MCP 连接。
+  - `src/types.ts`、`src/loop.ts`、`src/compact.ts`、`src/session.ts` 透传模型名并写入 `agent_usage.model`（覆盖 `agent_round`、`session_title`、`summary`）。
+  - `package.json` 预置发布元信息（`name: "@coda-ai/cli"`、`version: "0.1.0"`、`engines`、`publishConfig`），并移除 `dotenv`、`tsx` 依赖（含同步更新 `pnpm-lock.yaml`，一并移除仅由 `tsx` 引入的 `esbuild` 及其构建白名单 `pnpm-workspace.yaml`）；`README.md` 与 `AGENTS.md` 中的启动命令改为直接使用 `node src/main.ts` / `node src/index.ts`；本地 `.env` 已导入 `~/.coda/coda.db` 后与 `./data/` 一并删除。
+
+### 学到的 / 设计取舍
+
+- **2 张表 + 部分唯一索引优于第 3 张 `app_settings` 表（YAGNI）**：仅为了记录当前激活模型多建一张 KV 表偏重；在 `models.is_active` 上建 SQLite Partial Unique Index（`WHERE is_active = 1`），配合同步事务“先校验目标存在 → 清旧 → 置新”，由数据库引擎层保证全局最多只有一个激活模型，且未来加 `coda-desktop` 图形配置页时两表层级（Provider → Models）天然贴合。
+- **切模型热更新必须拆开 MCP 连接生命周期**：MCP 连接属于进程级外部会话，而工具列表随模型变化（如 `-flash` 挂本地联网工具、`-pro` 挂服务端 `web_search`），拆开后切换模型毫秒级生效且不会泄漏连接。
+- **迁移目录锚定 `import.meta.dirname`**：为后续发到 npm（`@coda-ai/cli`，命令 `coda`）铺路，用户从任意目录启动都不会因为 `process.cwd()` 变化找不到 migrations。
+
+### 已知局限 / 待办
+
+- 尚未配置打包构建脚本（如把 TS 编译到 `dist/`、复制 `migrations/`、加 `#!/usr/bin/env node` 与 `package.json` 的 `bin` / `files` 字段），真正执行 `pnpm publish` 前需补齐。
+- `package.json` 的 `engines.node` 目前为 `>=22.5.0`（对应 `node:sqlite`），若要保证无需 flag 直接用 `node` 运行 `.ts`，需 `>=22.18.0` / `>=23.6.0`（当前开发环境为 Node 24）。
+
+### 验证
+
+- `./node_modules/.bin/tsc --noEmit` 通过。
+- 在非项目目录 `/tmp` 下以 `CODA_HOME=/tmp/coda-step1` 连续启动两次，验证 `0o700` 权限、自动迁移幂等性及 `drizzle-kit check`。
+- 用临时 `CODA_HOME` 端到端断言验证 `src/config.ts`、`buildToolRegistry()` 热切换以及 `src/model-command.ts` 全部交互分支（新增、复用供应商、切换、改 Key 热刷新、删模型、级联删供应商、部分唯一索引拦截）。
+- 已将原 `.env` 配置导入 `~/.coda/coda.db` 并脱敏读回确认。
+- 尚未用真实网络运行完整 REPL 验证联网调用模型、会话中 `/model use` 切换模型后 `agent_usage.model` 的实测写入。
+
 ## 2026-11-26
 
 ### Added
