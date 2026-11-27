@@ -12,14 +12,8 @@ import {
   maskApiKey,
   setActiveModel,
   updateProvider,
-  type ActiveModelConfig,
-} from './config.ts'
-
-export type ModelCommandContext = {
-  rl: Interface
-  /** 当激活模型被切换、删除或其所属供应商配置更新时，由调用方刷新内存 runtime */
-  onActiveModelChange: (config: ActiveModelConfig | null) => Promise<void>
-}
+} from '../config.ts'
+import type { CommandContext, SlashCommand } from './types.ts'
 
 function printInfo(text: string) {
   process.stdout.write(styleText('blueBright', `${text}\n`))
@@ -112,7 +106,7 @@ async function handleAddProvider(rl: Interface) {
   printSuccess(`已添加供应商：${created.name} (${created.base_url}, key: ${maskApiKey(created.api_key)})`)
 }
 
-async function handleEditProvider(name: string | undefined, ctx: ModelCommandContext) {
+async function handleEditProvider(name: string | undefined, ctx: CommandContext) {
   if (!name) {
     printWarn('用法：/model provider edit <名称>')
     return
@@ -142,12 +136,12 @@ async function handleEditProvider(name: string | undefined, ctx: ModelCommandCon
   // 若当前激活模型正好属于该供应商，立即热刷新客户端和工具里的 API Key
   const active = getActiveModelConfig()
   if (active?.providerName === updated.name) {
-    await ctx.onActiveModelChange(active)
+    await ctx.reloadRuntime()
     printInfo(`当前激活模型 ${active.alias} 已同步应用最新供应商配置`)
   }
 }
 
-async function handleRemoveProvider(name: string | undefined, ctx: ModelCommandContext) {
+async function handleRemoveProvider(name: string | undefined, ctx: CommandContext) {
   if (!name) {
     printWarn('用法：/model provider rm <名称>')
     return
@@ -173,12 +167,12 @@ async function handleRemoveProvider(name: string | undefined, ctx: ModelCommandC
   const { hadActiveModel } = deleteProvider(name)
   printSuccess(`已删除供应商 "${name}"`)
   if (hadActiveModel) {
-    await ctx.onActiveModelChange(null)
+    await ctx.reloadRuntime()
     printWarn('当前激活模型已随供应商一并删除，请使用 /model use <别名> 或 /model add 重新激活模型')
   }
 }
 
-async function handleAddModel(ctx: ModelCommandContext) {
+async function handleAddModel(ctx: CommandContext) {
   const { rl } = ctx
   const existingProviders = listProviders()
 
@@ -244,26 +238,25 @@ async function handleAddModel(ctx: ModelCommandContext) {
   })
 
   if (created.is_active) {
-    const active = getActiveModelConfig()
-    await ctx.onActiveModelChange(active)
+    await ctx.reloadRuntime()
     printSuccess(`已添加并激活模型：${created.name} (${created.model_id})`)
   } else {
     printSuccess(`已添加模型：${created.name} (${created.model_id})`)
   }
 }
 
-async function handleUseModel(alias: string | undefined, ctx: ModelCommandContext) {
+async function handleUseModel(alias: string | undefined, ctx: CommandContext) {
   if (!alias) {
     printWarn('用法：/model use <别名>')
     return
   }
 
   const active = setActiveModel(alias)
-  await ctx.onActiveModelChange(active)
+  await ctx.reloadRuntime()
   printSuccess(`已切换当前模型：${active.alias} (${active.modelId} @ ${active.providerName})`)
 }
 
-async function handleRemoveModel(alias: string | undefined, ctx: ModelCommandContext) {
+async function handleRemoveModel(alias: string | undefined, ctx: CommandContext) {
   if (!alias) {
     printWarn('用法：/model rm <别名>')
     return
@@ -272,65 +265,68 @@ async function handleRemoveModel(alias: string | undefined, ctx: ModelCommandCon
   const { deleted, wasActive } = deleteModel(alias)
   printSuccess(`已删除模型：${deleted.name} (${deleted.model_id})`)
   if (wasActive) {
-    await ctx.onActiveModelChange(null)
+    await ctx.reloadRuntime()
     printWarn('被删除的是当前激活模型，请使用 /model use <别名> 或 /model add 激活其他模型')
   }
 }
 
-/** 处理 /model 及其全部子命令 */
-export async function handleModelCommand(args: string[], ctx: ModelCommandContext): Promise<void> {
-  const [sub, arg1, arg2] = args
+export const modelCommand: SlashCommand = {
+  name: '/model',
+  description: '管理供应商与模型配置（add / use / rm / provider）',
+  execute: async ({ args }, ctx) => {
+    const [sub, arg1, arg2] = args
 
-  try {
-    if (!sub) {
-      printModelList()
-      return
-    }
-
-    switch (sub) {
-      case 'list':
-      case 'ls':
+    try {
+      if (!sub) {
         printModelList()
         return
+      }
 
-      case 'add':
-        await handleAddModel(ctx)
-        return
+      switch (sub) {
+        case 'list':
+        case 'ls':
+          printModelList()
+          return
 
-      case 'use':
-        await handleUseModel(arg1, ctx)
-        return
+        case 'add':
+          await handleAddModel(ctx)
+          return
 
-      case 'rm':
-      case 'remove':
-        await handleRemoveModel(arg1, ctx)
-        return
+        case 'use':
+          await handleUseModel(arg1, ctx)
+          return
 
-      case 'provider':
-        if (!arg1 || arg1 === 'list' || arg1 === 'ls') {
-          printProviderList()
-        } else if (arg1 === 'add') {
-          await handleAddProvider(ctx.rl)
-        } else if (arg1 === 'edit') {
-          await handleEditProvider(arg2, ctx)
-        } else if (arg1 === 'rm' || arg1 === 'remove') {
-          await handleRemoveProvider(arg2, ctx)
-        } else {
+        case 'rm':
+        case 'remove':
+          await handleRemoveModel(arg1, ctx)
+          return
+
+        case 'provider':
+          if (!arg1 || arg1 === 'list' || arg1 === 'ls') {
+            printProviderList()
+          } else if (arg1 === 'add') {
+            await handleAddProvider(ctx.rl)
+          } else if (arg1 === 'edit') {
+            await handleEditProvider(arg2, ctx)
+          } else if (arg1 === 'rm' || arg1 === 'remove') {
+            await handleRemoveProvider(arg2, ctx)
+          } else {
+            printUsage()
+          }
+          return
+
+        case 'help':
+        case '-h':
+        case '--help':
           printUsage()
-        }
-        return
+          return
 
-      case 'help':
-      case '-h':
-      case '--help':
-        printUsage()
-        return
-
-      default:
-        printWarn(`未知子命令：/model ${sub}`)
-        printUsage()
+        default:
+          printWarn(`未知子命令：/model ${sub}`)
+          printUsage()
+      }
+    } catch (e) {
+      printError(`操作失败：${(e as Error).message}`)
     }
-  } catch (e) {
-    printError(`操作失败：${(e as Error).message}`)
-  }
+  },
 }

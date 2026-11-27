@@ -18,8 +18,9 @@
   - `src/drizzle/schema.ts` 新增 `providers`（`name`、`base_url`、`api_key`）与 `models`（`provider_id` 外键 `ON DELETE CASCADE`、`name` 别名、`model_id`、`is_active`），并为 `models.is_active` 建立部分唯一索引 `idx_models_single_active (WHERE is_active = 1)`；`agent_usage` 新增可空列 `model`。
   - 生成迁移 `src/drizzle/migrations/20261127101807_add_providers_and_models/migration.sql`。
   - 新增 `src/config.ts`：封装 Provider/Model CRUD、`maskApiKey()` 脱敏展示及 `setActiveModel()` 原子切换。
-- `/model` 交互管理命令：
-  - 新增 `src/model-command.ts` 并接入 `src/main.ts`，支持 `/model`、`/model add`、`/model use <别名>`、`/model rm <别名>` 以及 `/model provider [add|edit|rm]`，支持运行期热切换与编辑供应商 Key 后自动刷新当前激活运行时。
+- `/model` 与 `src/commands/` 斜杠命令架构：
+  - 新增 `src/commands/`（镜像 `src/tools/` 的模式）：包含 `types.ts`（`SlashCommand` / `CommandContext`）、`index.ts`（统一分发 `dispatchCommand()`，内置 `/help` 与 `/exit`，并拦截未知 `/xxx` 命令避免误发模型）、`model.ts`（`/model` 完整子命令族）、`context.ts`（`/context`）、`compact.ts`（`/compact`）、`session.ts`（`/session`）。
+  - 砍掉 `src/main.ts` 中的内存 `history` 副本，改由各命令和主循环直接调用 `loadHistory(sessionId)` 以 SQLite 为唯一事实来源；`CommandContext` 收敛为最小进程私有态（`rl`、`sessionId`、`runtime` / `reloadRuntime`）。
 
 ### Changed
 
