@@ -5,6 +5,10 @@
 
 ## 2026-11-27
 
+### Changed
+
+- 联网工具选择：`buildToolRegistry` 默认给所有模型挂 hosted `{ type: 'web_search' }`；仅 `deepseek-flash*` 改为客户端 `deepseek_web_search` / `deepseek_read_url`，二者互斥。不再用 `*-pro` 后缀判断。
+
 ### Added
 
 - 用户目录底座与启动自动迁移：

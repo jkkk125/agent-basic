@@ -35,6 +35,9 @@ export function buildToolRegistry(options: {
   const { modelName, apiKey, mcpTools } = options
   const getApiKey = () => apiKey
 
+  // flash 没有服务端联网，用客户端搜索 / 抓取；其余默认挂 hosted web_search
+  const isDeepseekFlash = modelName.startsWith('deepseek-flash')
+
   // 数组顺序就是发给模型的 tools 顺序，调整顺序会改变请求前缀、影响缓存命中
   const tools: AgentTool[] = [
     currentTimeTool,
@@ -42,16 +45,15 @@ export function buildToolRegistry(options: {
     runShellTool,
     applyPatchTool,
     ...mcpTools,
-    // flash 模型没有服务端联网能力，用客户端执行的搜索 / 抓取工具补上
-    ...(modelName.endsWith('-flash')
+    ...(isDeepseekFlash
       ? [createDeepseekWebSearchTool(getApiKey), createDeepseekReadUrlTool(getApiKey)]
       : []),
   ]
 
-  // pro 模型的联网由服务端执行：只有定义，没有本地 execute
-  const hostedSpecs: OpenAI.Responses.Tool[] = modelName.endsWith('-pro')
-    ? [{ type: 'web_search' }]
-    : []
+  // hosted 工具只有定义、没有本地 execute；与 flash 客户端工具互斥
+  const hostedSpecs: OpenAI.Responses.Tool[] = isDeepseekFlash
+    ? []
+    : [{ type: 'web_search' }]
 
   const byName = new Map<string, AgentTool>()
   for (const tool of tools) {
