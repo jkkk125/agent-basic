@@ -1,0 +1,6 @@
+permissions:
+  drizzle-kit:
+    skills: true
+skills:
+  dirs:
+    - .agents/skills
