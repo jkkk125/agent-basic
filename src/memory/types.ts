@@ -1,3 +1,5 @@
+import type { OpenAI } from 'openai'
+
 /** 记忆作用域：global 跨所有项目生效，project 按 .git 项目根目录隔离 */
 export const MEMORY_SCOPES = ['global', 'project'] as const
 export type MemoryScope = (typeof MEMORY_SCOPES)[number]
@@ -41,6 +43,8 @@ export type MemoryRecord = MemoryRecordSummary & {
   content: string
   /** 磁盘上的原始 Markdown 全文 */
   raw: string
+  /** 首次创建时间（用于 update 时保留原始创建时间） */
+  createdAt?: string
 }
 
 /** 在线向 inbox 追加碎片笔记时的入参 */
@@ -53,6 +57,20 @@ export type AppendInboxNoteInput = {
   projectRoot?: string
 }
 
+/** 写入或更新一条正式长期记忆（entries/）时的入参 */
+export type WriteMemoryEntryInput = {
+  scope: MemoryScope
+  /** 正式记忆文件名（必须是以 .md 结尾的纯文件名） */
+  file: string
+  type: MemoryType
+  title: string
+  description: string
+  content: string
+  /** 更新旧条目时透传原来的 created_at，避免覆盖首次创建时间 */
+  createdAt?: string
+  projectRoot?: string
+}
+
 /** 按作用域与桶分组的记忆总览 */
 export type MemoryListing = {
   projectRoot: string
@@ -61,9 +79,59 @@ export type MemoryListing = {
   global: {
     entries: MemoryRecordSummary[]
     inbox: MemoryRecordSummary[]
+    archivedCount: number
   }
   project: {
     entries: MemoryRecordSummary[]
     inbox: MemoryRecordSummary[]
+    archivedCount: number
   }
+}
+
+/** 整理器模型输出的单条文件操作计划（与 OpenAI strict json_schema 兼容，无 optional 均用 nullable） */
+export type ConsolidationActionType = 'create' | 'update' | 'delete'
+
+export type ConsolidationAction = {
+  action: ConsolidationActionType
+  /** update/delete 对应已有 entries 文件名；create 为模型建议的文件名或 slug */
+  file: string
+  type: MemoryType | null
+  title: string | null
+  description: string | null
+  content: string | null
+  reason: string
+}
+
+/** 整理器模型输出的完整整理计划 */
+export type ConsolidationPlan = {
+  summary: string
+  actions: ConsolidationAction[]
+}
+
+/** 校验并归一化后的一条待执行/已执行操作记录，供终端渲染 diff 与审计 */
+export type AppliedConsolidationAction = {
+  action: ConsolidationActionType
+  /** 最终落盘（或拟落盘）的安全文件名 */
+  file: string
+  type?: MemoryType
+  title?: string
+  description?: string
+  reason: string
+}
+
+/** 单个作用域（global 或 project）一次整理的完整报告 */
+export type ConsolidationScopeResult = {
+  scope: MemoryScope
+  /** inbox 为空时直接跳过，不调用模型 */
+  skipped: boolean
+  dryRun: boolean
+  /** 本次参与整理的 inbox 文件快照列表 */
+  consumedInboxFiles: string[]
+  /** 实际移入 archive/ 的文件名（dryRun 时为空） */
+  archivedInboxFiles: string[]
+  summary: string
+  appliedActions: AppliedConsolidationAction[]
+  responseId: string | null
+  model: string
+  usage: OpenAI.Responses.ResponseUsage | null
 }

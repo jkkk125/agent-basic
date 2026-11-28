@@ -12,11 +12,13 @@ import {
   type MemoryRecordSummary,
   type MemoryScope,
   type MemoryType,
+  type WriteMemoryEntryInput,
 } from './types.ts'
 
 const MEMORY_DIR_MODE = 0o700
 const MEMORY_FILE_MODE = 0o600
 const MAX_SLUG_CHARS = 32
+const MAX_ENTRY_SLUG_CHARS = 48
 
 /** 把 frontmatter 里的单行字段值洗掉换行，防止模型传入多行标题撑坏 YAML 头 */
 function sanitizeSingleLine(value: string): string {
@@ -37,21 +39,29 @@ function formatFileTimestamp(date: Date): string {
 }
 
 /**
- * 从标题生成可读且跨平台安全的文件名后缀（保留中文、字母、数字，去掉路径分隔符和非法符号）。
- * 人类 ls 查看 inbox 目录时能直接看懂每条笔记的主题。
+ * 从标题或建议文件名生成可读且跨平台安全的 slug（保留中文、字母、数字，去掉路径分隔符和非法符号）。
+ * 人类 ls 查看目录时能直接看懂每条记忆的主题。
  */
-function slugifyTitle(title: string): string {
-  const cleaned = sanitizeSingleLine(title)
+function slugifyName(raw: string, maxChars: number, fallback: string): string {
+  const cleaned = sanitizeSingleLine(raw)
+    .replace(/\.md$/i, '')
     .replace(/[\\/:*?"<>|\s]+/g, '-')
     .replace(/-+/g, '-')
     .replace(/^-+|-+$/g, '')
-    .slice(0, MAX_SLUG_CHARS)
+    .slice(0, maxChars)
     .replace(/-+$/g, '')
-  return cleaned || 'note'
+  return cleaned || fallback
+}
+
+/** 把整理器建议的 create 文件名/slug 归一化为安全的 `<slug>.md` */
+export function slugifyEntryFileName(rawName: string, fallbackTitle = 'memory'): string {
+  const base = slugifyName(rawName, MAX_ENTRY_SLUG_CHARS, '')
+    || slugifyName(fallbackTitle, MAX_ENTRY_SLUG_CHARS, 'memory')
+  return `${base}.md`
 }
 
 /** 校验文件名只指向当前桶内的单个 .md 文件，防止 ../ 等路径穿越 */
-function assertSafeFileName(file: string): string {
+export function assertSafeFileName(file: string): string {
   const trimmed = file.trim()
   if (
     !trimmed
@@ -75,7 +85,7 @@ async function atomicWriteFile(filePath: string, content: string): Promise<void>
   try {
     await pfs.rename(tmpPath, filePath)
   } catch (error) {
-    await pfs.unlink(tmpPath).catch(() => { })
+    await pfs.unlink(tmpPath).catch(() => {})
     throw error
   }
 }
@@ -112,13 +122,14 @@ function normalizeMemoryType(rawType: string | undefined, scope: MemoryScope): M
 }
 
 /**
- * 确保指定作用域的 inbox/ 与 entries/ 目录存在（收紧权限 0o700）。
+ * 确保指定作用域的 inbox/、entries/、archive/ 目录存在（收紧权限 0o700）。
  * 项目作用域额外写一个 .project-root 标记文件，方便人工查看 ~/.coda/memory/projects/ 时知道对应哪个仓库。
  */
 async function ensureScopeDirs(scope: MemoryScope, projectRoot: string): Promise<string> {
   const scopeDir = getScopeMemoryDir(scope, projectRoot)
   await pfs.mkdir(path.join(scopeDir, 'inbox'), { recursive: true, mode: MEMORY_DIR_MODE })
   await pfs.mkdir(path.join(scopeDir, 'entries'), { recursive: true, mode: MEMORY_DIR_MODE })
+  await pfs.mkdir(path.join(scopeDir, 'archive'), { recursive: true, mode: MEMORY_DIR_MODE })
 
   if (scope === 'project') {
     const markerPath = path.join(scopeDir, '.project-root')
@@ -135,12 +146,13 @@ async function ensureScopeDirs(scope: MemoryScope, projectRoot: string): Promise
   return scopeDir
 }
 
-/** 读取某个桶（entries 或 inbox）下的全部 Markdown 文件并解析为摘要 */
-async function listBucket(
+/** 读取某个桶（entries 或 inbox）下的全部完整记录（含正文），供摘要列表与整理器共用 */
+export async function listBucketRecords(
   scope: MemoryScope,
   bucket: MemoryBucket,
-  scopeDir: string,
-): Promise<MemoryRecordSummary[]> {
+  projectRoot: string = resolveProjectRoot(),
+): Promise<MemoryRecord[]> {
+  const scopeDir = getScopeMemoryDir(scope, projectRoot)
   const bucketDir = path.join(scopeDir, bucket)
   const dirEntries = await pfs.readdir(bucketDir, { withFileTypes: true }).catch(() => [])
   const mdFiles = dirEntries
@@ -149,12 +161,12 @@ async function listBucket(
     .sort()
 
   const records = await Promise.all(
-    mdFiles.map(async (file): Promise<MemoryRecordSummary | null> => {
+    mdFiles.map(async (file): Promise<MemoryRecord | null> => {
       const fullPath = path.join(bucketDir, file)
       const raw = await pfs.readFile(fullPath, 'utf8').catch(() => null)
       if (raw === null) return null
 
-      const { meta } = parseFrontmatter(raw)
+      const { meta, body } = parseFrontmatter(raw)
       return {
         scope,
         bucket,
@@ -164,11 +176,35 @@ async function listBucket(
         title: meta.title || file.replace(/\.md$/, ''),
         description: meta.description || undefined,
         timestamp: meta.updated_at || meta.created_at || '',
+        createdAt: meta.created_at || undefined,
+        content: body,
+        raw,
       }
     }),
   )
 
-  return records.filter((item): item is MemoryRecordSummary => item !== null)
+  return records.filter((item): item is MemoryRecord => item !== null)
+}
+
+/** 去掉完整正文，转成轻量摘要 */
+function toSummary(record: MemoryRecord): MemoryRecordSummary {
+  return {
+    scope: record.scope,
+    bucket: record.bucket,
+    file: record.file,
+    path: record.path,
+    type: record.type,
+    title: record.title,
+    description: record.description,
+    timestamp: record.timestamp,
+  }
+}
+
+/** 统计已归档的历史 inbox 笔记数量，供 /memory 观测展示 */
+async function countArchivedNotes(scope: MemoryScope, projectRoot: string): Promise<number> {
+  const archiveDir = path.join(getScopeMemoryDir(scope, projectRoot), 'archive')
+  const entries = await pfs.readdir(archiveDir, { withFileTypes: true }).catch(() => [])
+  return entries.filter((entry) => entry.isFile() && entry.name.endsWith('.md')).length
 }
 
 /**
@@ -195,7 +231,7 @@ export async function appendInboxNote(input: AppendInboxNoteInput): Promise<Memo
   const createdAt = now.toISOString()
   // 时间戳 + 4 位随机 hex，防止同一毫秒内模型连续调两次 memory_note 撞文件名
   const suffix = randomBytes(2).toString('hex')
-  const file = `${formatFileTimestamp(now)}-${suffix}-${slugifyTitle(title)}.md`
+  const file = `${formatFileTimestamp(now)}-${suffix}-${slugifyName(title, MAX_SLUG_CHARS, 'note')}.md`
   const fullPath = path.join(scopeDir, 'inbox', file)
 
   const markdown = [
@@ -223,24 +259,142 @@ export async function appendInboxNote(input: AppendInboxNoteInput): Promise<Memo
   }
 }
 
+/**
+ * 整理器写入入口：原子创建或更新一条正式长期记忆（entries/<file>）。
+ * update 场景会保留原文件的 created_at，只推进 updated_at。
+ */
+export async function writeMemoryEntry(input: WriteMemoryEntryInput): Promise<MemoryRecordSummary> {
+  if (!(MEMORY_SCOPES as readonly string[]).includes(input.scope)) {
+    throw new Error(`非法 scope：${input.scope}`)
+  }
+  if (!(MEMORY_TYPES as readonly string[]).includes(input.type)) {
+    throw new Error(`非法 type：${input.type}`)
+  }
+
+  const safeFile = assertSafeFileName(input.file)
+  const title = sanitizeSingleLine(input.title)
+  const description = sanitizeSingleLine(input.description)
+  const content = input.content.trim()
+  if (!title) throw new Error('正式记忆 title 不能为空')
+  if (!content) throw new Error('正式记忆 content 不能为空')
+
+  const projectRoot = input.projectRoot ?? resolveProjectRoot()
+  const scopeDir = await ensureScopeDirs(input.scope, projectRoot)
+  const fullPath = path.join(scopeDir, 'entries', safeFile)
+
+  const nowIso = new Date().toISOString()
+  const createdAt = input.createdAt?.trim() || nowIso
+
+  const lines = [
+    '---',
+    `scope: ${input.scope}`,
+    `type: ${input.type}`,
+    `title: ${title}`,
+    ...(description ? [`description: ${description}`] : []),
+    `created_at: ${createdAt}`,
+    `updated_at: ${nowIso}`,
+    '---',
+    '',
+    content,
+    '',
+  ]
+
+  await atomicWriteFile(fullPath, lines.join('\n'))
+
+  return {
+    scope: input.scope,
+    bucket: 'entries',
+    file: safeFile,
+    path: fullPath,
+    type: input.type,
+    title,
+    description: description || undefined,
+    timestamp: nowIso,
+  }
+}
+
+/** 整理器删除入口：安全删除 entries/ 下指定的过时或已被合并的正式记忆 */
+export async function deleteMemoryEntry(params: {
+  scope: MemoryScope
+  file: string
+  projectRoot?: string
+}): Promise<boolean> {
+  const safeFile = assertSafeFileName(params.file)
+  const projectRoot = params.projectRoot ?? resolveProjectRoot()
+  const fullPath = path.join(getScopeMemoryDir(params.scope, projectRoot), 'entries', safeFile)
+  try {
+    await pfs.unlink(fullPath)
+    return true
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
+    throw error
+  }
+}
+
+/**
+ * 归档本次整理已消费的 inbox 文件（inbox/<file> → archive/<file>）。
+ * 关键点：只移动本次快照里的明确文件列表，绝不清空整个 inbox/ 目录，
+ * 避免整理期间前台并发写入的新 note 被误删；同时保留原文供人工审计回溯。
+ */
+export async function archiveInboxFiles(
+  scope: MemoryScope,
+  files: string[],
+  projectRoot: string = resolveProjectRoot(),
+): Promise<string[]> {
+  if (files.length === 0) return []
+  const scopeDir = await ensureScopeDirs(scope, projectRoot)
+  const archived: string[] = []
+
+  for (const file of files) {
+    const safeFile = assertSafeFileName(file)
+    const src = path.join(scopeDir, 'inbox', safeFile)
+    const dst = path.join(scopeDir, 'archive', safeFile)
+    try {
+      await pfs.rename(src, dst)
+      archived.push(safeFile)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    }
+  }
+
+  return archived
+}
+
 /** 列出当前生效的 global + project 全部记忆摘要（按 entries / inbox 分组） */
 export async function listMemories(projectRoot: string = resolveProjectRoot()): Promise<MemoryListing> {
   const globalDir = getScopeMemoryDir('global', projectRoot)
   const projectDir = getScopeMemoryDir('project', projectRoot)
 
-  const [globalEntries, globalInbox, projectEntries, projectInbox] = await Promise.all([
-    listBucket('global', 'entries', globalDir),
-    listBucket('global', 'inbox', globalDir),
-    listBucket('project', 'entries', projectDir),
-    listBucket('project', 'inbox', projectDir),
+  const [
+    globalEntries,
+    globalInbox,
+    globalArchivedCount,
+    projectEntries,
+    projectInbox,
+    projectArchivedCount,
+  ] = await Promise.all([
+    listBucketRecords('global', 'entries', projectRoot),
+    listBucketRecords('global', 'inbox', projectRoot),
+    countArchivedNotes('global', projectRoot),
+    listBucketRecords('project', 'entries', projectRoot),
+    listBucketRecords('project', 'inbox', projectRoot),
+    countArchivedNotes('project', projectRoot),
   ])
 
   return {
     projectRoot,
     globalDir,
     projectDir,
-    global: { entries: globalEntries, inbox: globalInbox },
-    project: { entries: projectEntries, inbox: projectInbox },
+    global: {
+      entries: globalEntries.map(toSummary),
+      inbox: globalInbox.map(toSummary),
+      archivedCount: globalArchivedCount,
+    },
+    project: {
+      entries: projectEntries.map(toSummary),
+      inbox: projectInbox.map(toSummary),
+      archivedCount: projectArchivedCount,
+    },
   }
 }
 
@@ -272,6 +426,7 @@ export async function readMemory(params: {
     title: meta.title || safeFile.replace(/\.md$/, ''),
     description: meta.description || undefined,
     timestamp: meta.updated_at || meta.created_at || '',
+    createdAt: meta.created_at || undefined,
     content: body,
     raw,
   }
@@ -280,8 +435,8 @@ export async function readMemory(params: {
 /**
  * 生成注入系统提示（instructions）的极简记忆索引：
  * 只列出元信息（scope / bucket / type / title / file），不塞入正文，
- * 与 Skills 的渐进式披露一致；同时在 Step 1 把尚未整理的 inbox 也纳入索引，
- * 让新会话在整理器运行前也能按需读到刚记下的笔记。
+ * 与 Skills 的渐进式披露一致；同时把尚未整理的 inbox 标上 [待整理] 纳入索引，
+ * 让新会话在整理器运行前也能做到“读己之写”。
  */
 export async function formatMemoryIndexForPrompt(
   projectRoot: string = resolveProjectRoot(),
