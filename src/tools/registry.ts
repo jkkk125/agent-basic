@@ -3,6 +3,7 @@ import { applyPatchTool } from './apply-patch.ts'
 import { createDeepseekReadUrlTool, createDeepseekWebSearchTool } from './deepseek.ts'
 import { readFileTool } from './file.ts'
 import { connectMcpTools } from './mcp.ts'
+import { memoryNoteTool, memoryReadTool } from './memory.ts'
 import { runShellTool } from './shell.ts'
 import { currentTimeTool } from './time.ts'
 import type { AgentTool } from './types.ts'
@@ -44,6 +45,8 @@ export function buildToolRegistry(options: {
     readFileTool,
     runShellTool,
     applyPatchTool,
+    memoryNoteTool,
+    memoryReadTool,
     ...mcpTools,
     ...(isDeepseekFlash
       ? [createDeepseekWebSearchTool(getApiKey), createDeepseekReadUrlTool(getApiKey)]

@@ -1,6 +1,7 @@
 import { styleText } from 'node:util'
 import { compactCommand } from './compact.ts'
 import { contextCommand } from './context.ts'
+import { memoryCommand } from './memory.ts'
 import { modelCommand } from './model.ts'
 import { sessionCommand } from './session.ts'
 import type { CommandContext, CommandResult, SlashCommand } from './types.ts'
@@ -19,6 +20,7 @@ const commands: SlashCommand[] = [
   sessionCommand,
   contextCommand,
   compactCommand,
+  memoryCommand,
   exitCommand,
 ]
 
